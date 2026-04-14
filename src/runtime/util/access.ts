@@ -10,9 +10,14 @@ export interface EnvSecurity {
   allow?: string[];
 }
 
+export interface NetworkSecurity {
+  allow?: string[];
+}
+
 export interface SecurityConfig {
   filesystem?: FilesystemSecurity;
   env?: EnvSecurity;
+  network?: NetworkSecurity;
 }
 
 // Default applied when the server YAML has no `security:` block or a
