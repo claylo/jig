@@ -1,5 +1,6 @@
 import type { DispatchHandler, Handler } from "../config.ts";
 import type { ToolCallResult } from "./types.ts";
+import { evaluate } from "../util/jsonlogic.ts";
 
 /**
  * The invoke function type `dispatch` accepts as a parameter. Keeps this
@@ -42,6 +43,24 @@ export async function invokeDispatch(
     return errorResult(
       `dispatch: unknown action "${actionValue}". Known actions: ${known}`,
     );
+  }
+
+  if (matched.when !== undefined) {
+    let guardPassed: boolean;
+    try {
+      const raw = await evaluate(matched.when, args);
+      guardPassed = Boolean(raw);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return errorResult(
+        `dispatch: guard for action "${actionValue}" errored: ${message}`,
+      );
+    }
+    if (!guardPassed) {
+      return errorResult(
+        `dispatch: guard for action "${actionValue}" did not pass`,
+      );
+    }
   }
 
   if (matched.requires) {

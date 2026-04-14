@@ -31,6 +31,7 @@ export interface ExecHandler {
 
 export interface DispatchCase {
   requires?: string[];
+  when?: JsonLogicRule;
   handler: Handler;
 }
 
@@ -302,9 +303,14 @@ function validateDispatch(v: unknown, toolName: string): DispatchHandler {
       }
       requiresValue = requires;
     }
-    cases[name] = requiresValue !== undefined
-      ? { requires: requiresValue, handler: subHandler }
-      : { handler: subHandler };
+    const when = e["when"];
+    // when: is arbitrary JSONLogic — no structural validation at parse
+    // time. Engine errors at evaluation time become isError tool results.
+    const whenValue: JsonLogicRule | undefined = when === undefined ? undefined : when;
+    const caseValue: DispatchCase = { handler: subHandler };
+    if (requiresValue !== undefined) caseValue.requires = requiresValue;
+    if (whenValue !== undefined) caseValue.when = whenValue;
+    cases[name] = caseValue;
   }
   return { dispatch: { on: d["on"], cases } };
 }
