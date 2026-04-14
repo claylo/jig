@@ -113,6 +113,95 @@ tools:
   }
 });
 
+test("dispatcher tools/call routes through exec with field-named errors", { timeout: 10_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-int-"));
+  const configPath = join(dir, "jig.yaml");
+  writeFileSync(
+    configPath,
+    `server: { name: dispatch-int, version: "0.0.1" }
+tools:
+  - name: echo
+    description: Echo a message
+    input:
+      action: { type: string, required: true }
+      message: { type: string }
+    handler:
+      dispatch:
+        on: action
+        cases:
+          say:
+            requires: [message]
+            handler:
+              exec: "/bin/echo {{message}}"
+          silent:
+            handler:
+              inline: { text: "" }
+`,
+  );
+  try {
+    const responses = await sendRpc(
+      join(process.cwd(), "src/runtime/index.ts"),
+      configPath,
+      [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "t", version: "0" },
+          },
+        },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "echo", arguments: { action: "say", message: "hello" } },
+        },
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "echo", arguments: { action: "say" } },
+        },
+        {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/list",
+          params: {},
+        },
+      ],
+    );
+    assert.equal(responses.length, 4);
+
+    // Async handlers (exec) resolve out of request order. Match by id.
+    const byId = new Map(responses.map((r) => [r.id, r]));
+
+    const ok = byId.get(2)!.result as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+    assert.equal(ok.isError, undefined);
+    assert.equal(ok.content[0]!.text.trim(), "hello");
+
+    const bad = byId.get(3)!.result as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+    assert.equal(bad.isError, true);
+    assert.match(bad.content[0]!.text, /message.*required.*say/i);
+
+    const list = byId.get(4)!.result as {
+      tools: Array<{ inputSchema?: { properties?: Record<string, { enum?: string[] }> } }>;
+    };
+    const actionProp = list.tools[0]!.inputSchema!.properties!.action!;
+    assert.deepEqual(actionProp.enum, ["say", "silent"]);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
 test("initialize returns serverInfo matching config", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "jig-int-"));
   const configPath = join(dir, "jig.yaml");

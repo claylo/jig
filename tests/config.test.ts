@@ -63,6 +63,77 @@ test("resolveConfigPath falls back to sibling jig.yaml", () => {
   assert.equal(resolved, "/opt/jig/jig.yaml");
 });
 
+test("parseConfig accepts a tool with an exec handler", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: runner
+    description: runs a script
+    handler:
+      exec: "/bin/echo hello"
+`;
+  const config = parseConfig(yaml);
+  assert.deepEqual(config.tools[0]!.handler, { exec: "/bin/echo hello" });
+});
+
+test("parseConfig accepts a dispatcher tool", () => {
+  const yaml = `
+server: { name: d, version: "0.1.0" }
+tools:
+  - name: linear
+    description: issue tracker
+    input:
+      action: { type: string, required: true }
+      id: { type: string }
+    handler:
+      dispatch:
+        on: action
+        cases:
+          get:
+            requires: [id]
+            handler:
+              exec: "/bin/echo {{id}}"
+          search:
+            handler:
+              inline: { text: "no results" }
+`;
+  const config = parseConfig(yaml);
+  const handler = config.tools[0]!.handler;
+  assert.ok("dispatch" in handler);
+  assert.equal(handler.dispatch.on, "action");
+  assert.deepEqual(Object.keys(handler.dispatch.cases), ["get", "search"]);
+  assert.deepEqual(handler.dispatch.cases["get"]!.requires, ["id"]);
+});
+
+test("parseConfig rejects a dispatcher with zero cases", () => {
+  const yaml = `
+server: { name: d, version: "0.1.0" }
+tools:
+  - name: empty
+    description: x
+    handler:
+      dispatch:
+        on: action
+        cases: {}
+`;
+  assert.throws(() => parseConfig(yaml), /at least one case/i);
+});
+
+test("parseConfig rejects a dispatcher missing the on field", () => {
+  const yaml = `
+server: { name: d, version: "0.1.0" }
+tools:
+  - name: no-on
+    description: x
+    handler:
+      dispatch:
+        cases:
+          foo:
+            handler: { inline: { text: "f" } }
+`;
+  assert.throws(() => parseConfig(yaml), /dispatch\.on/i);
+});
+
 test("loadConfigFromFile parses an on-disk file", () => {
   const dir = mkdtempSync(join(tmpdir(), "jig-test-"));
   const path = join(dir, "jig.yaml");

@@ -36,11 +36,8 @@ export interface DispatchHandler {
   };
 }
 
-export type Handler = InlineHandler | DispatchHandler;
-// Phase 4 of Plan 2 adds ExecHandler to this union once validateHandler
-// parses exec YAML. ExecHandler is already declared so exec.ts has a
-// shared type. HttpHandler, GraphqlHandler, ComputeHandler land in
-// later plans.
+export type Handler = InlineHandler | ExecHandler | DispatchHandler;
+// HttpHandler, GraphqlHandler, ComputeHandler land in later plans.
 
 export interface ToolDefinition {
   name: string;
@@ -145,7 +142,11 @@ function validateInput(
 }
 
 function validateHandler(v: unknown, toolName: string): Handler {
+  if (!v || typeof v !== "object") {
+    throw new Error(`config: tools[${toolName}].handler must be a mapping`);
+  }
   const h = v as Record<string, unknown>;
+
   if (h["inline"] && typeof h["inline"] === "object") {
     const inline = h["inline"] as Record<string, unknown>;
     if (typeof inline["text"] !== "string") {
@@ -155,9 +156,72 @@ function validateHandler(v: unknown, toolName: string): Handler {
     }
     return { inline: { text: inline["text"] } };
   }
+
+  if (typeof h["exec"] === "string") {
+    if (h["exec"].length === 0) {
+      throw new Error(
+        `config: tools[${toolName}].handler.exec must be a non-empty string`,
+      );
+    }
+    return { exec: h["exec"] };
+  }
+
+  if (h["dispatch"] && typeof h["dispatch"] === "object") {
+    return validateDispatch(h["dispatch"], toolName);
+  }
+
   throw new Error(
-    `config: tools[${toolName}].handler has no supported handler type (Plan 1 supports: inline)`,
+    `config: tools[${toolName}].handler has no supported handler type (Plan 2 supports: inline, exec, dispatch)`,
   );
+}
+
+function validateDispatch(v: unknown, toolName: string): DispatchHandler {
+  const d = v as Record<string, unknown>;
+  if (typeof d["on"] !== "string" || d["on"].length === 0) {
+    throw new Error(
+      `config: tools[${toolName}].handler.dispatch.on is required and must be a string`,
+    );
+  }
+  if (!d["cases"] || typeof d["cases"] !== "object") {
+    throw new Error(
+      `config: tools[${toolName}].handler.dispatch.cases must be a mapping`,
+    );
+  }
+  const rawCases = d["cases"] as Record<string, unknown>;
+  const caseNames = Object.keys(rawCases);
+  if (caseNames.length === 0) {
+    throw new Error(
+      `config: tools[${toolName}].handler.dispatch.cases must declare at least one case`,
+    );
+  }
+  const cases: Record<string, DispatchCase> = {};
+  for (const name of caseNames) {
+    const entry = rawCases[name];
+    if (!entry || typeof entry !== "object") {
+      throw new Error(
+        `config: tools[${toolName}].handler.dispatch.cases.${name} must be a mapping`,
+      );
+    }
+    const e = entry as Record<string, unknown>;
+    const subHandler = validateHandler(e["handler"], `${toolName}:${name}`);
+    const requires = e["requires"];
+    let requiresValue: string[] | undefined;
+    if (requires !== undefined) {
+      if (
+        !Array.isArray(requires) ||
+        !requires.every((r) => typeof r === "string")
+      ) {
+        throw new Error(
+          `config: tools[${toolName}].handler.dispatch.cases.${name}.requires must be an array of strings`,
+        );
+      }
+      requiresValue = requires;
+    }
+    cases[name] = requiresValue !== undefined
+      ? { requires: requiresValue, handler: subHandler }
+      : { handler: subHandler };
+  }
+  return { dispatch: { on: d["on"], cases } };
 }
 
 export interface ResolveArgs {
