@@ -202,6 +202,106 @@ tools:
   }
 });
 
+test(
+  "compute + when guards + transform round-trip over stdio",
+  { timeout: 10_000 },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jig-plan3-int-"));
+    const configPath = join(dir, "jig.yaml");
+    writeFileSync(
+      configPath,
+      `server: { name: plan3-int, version: "0.0.1" }
+tools:
+  - name: envcheck
+    description: x
+    input:
+      action: { type: string, required: true }
+    handler:
+      dispatch:
+        on: action
+        cases:
+          platform:
+            handler:
+              compute: { "os.platform": [] }
+          macos_only:
+            when: { "==": [{ "os.platform": [] }, "\${process.platform}"] }
+            handler:
+              inline: { text: "gated pass" }
+          never_match:
+            when: { "==": [1, 2] }
+            handler:
+              inline: { text: "should not run" }
+    transform:
+      cat: ["wrap(", { var: "result" }, ")"]
+`.replace("${process.platform}", process.platform),
+    );
+    try {
+      // Match responses by id: async handlers can complete out of
+      // request order over stdio (landmine from Plan 2 handoff).
+      const rpcResponses = await sendRpc(
+        join(process.cwd(), "src/runtime/index.ts"),
+        configPath,
+        [
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              clientInfo: { name: "t", version: "0" },
+            },
+          },
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: "envcheck", arguments: { action: "platform" } },
+          },
+          {
+            jsonrpc: "2.0",
+            id: 3,
+            method: "tools/call",
+            params: { name: "envcheck", arguments: { action: "macos_only" } },
+          },
+          {
+            jsonrpc: "2.0",
+            id: 4,
+            method: "tools/call",
+            params: { name: "envcheck", arguments: { action: "never_match" } },
+          },
+        ],
+      );
+
+      const byId = new Map<number, (typeof rpcResponses)[number]>();
+      for (const r of rpcResponses) byId.set(r.id as number, r);
+
+      const platform = byId.get(2)!.result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      assert.equal(platform.isError, undefined);
+      assert.match(platform.content[0]!.text, /^wrap\(.+\)$/);
+
+      const gated = byId.get(3)!.result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      assert.equal(gated.isError, undefined);
+      assert.match(gated.content[0]!.text, /wrap\(gated pass\)/);
+
+      const blocked = byId.get(4)!.result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      assert.equal(blocked.isError, true);
+      assert.match(blocked.content[0]!.text, /guard.*never_match/i);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  },
+);
+
 test("initialize returns serverInfo matching config", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "jig-int-"));
   const configPath = join(dir, "jig.yaml");

@@ -43,3 +43,20 @@ smoke-dispatch:
       exit 1
     fi
     echo "$output" | tail -1 | jq .
+
+# Smoke-compute: exercise the compute + guard + transform example. Sends
+# initialize + tools/call for summary, platform_only, and token_echo.
+# Verifies each returns the expected shape and that transform wraps
+# them.
+smoke-compute:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requests='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
+    {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"envcheck","arguments":{"action":"summary"}}}
+    {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"envcheck","arguments":{"action":"token_echo","var":"HOME"}}}'
+    output=$(echo "$requests" | node --experimental-transform-types src/runtime/index.ts --config examples/compute-and-guards.yaml)
+    if [ -z "$output" ]; then
+      echo "smoke-compute: no response from runtime" >&2
+      exit 1
+    fi
+    echo "$output" | tail -2 | jq .

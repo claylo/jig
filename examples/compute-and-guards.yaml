@@ -1,0 +1,94 @@
+# A Plan 3 example that exercises compute, when: guards, helpers,
+# and tool-level transform together.
+#
+# The helpers (per ADR-0008) show up in realistic places:
+#   - os.platform + os.arch in a compute that returns host info
+#   - env.has + env.get in a guarded case (token_echo)
+#   - file.is_dir + path.join + env.get composed in a home_config guard
+#   - os.platform in a simple platform_only guard
+#
+# A tool-level transform wraps the raw handler output in a standard
+# envelope so callers get a uniform shape across actions.
+
+server:
+  name: jig-plan3-example
+  version: "1.0.0"
+  description: |
+    Demonstrates Plan 3: compute handlers, when guards with helpers,
+    tool-level transform. This is the Plan 3 smoke target.
+
+  # ADR-0009: per-server access controls for built-in helpers.
+  #   filesystem.allow extends the default ["."] (runtime dir). We add
+  #     $HOME/.config so the home_config case can run file.is_dir
+  #     against it without being denied.
+  #   env.allow is omitted, so the defaults apply:
+  #     JIG_*, HOME, USER, LANG, LC_*, TZ, PATH
+  security:
+    filesystem:
+      allow:
+        - "."
+        - "$HOME/.config"
+
+tools:
+  - name: envcheck
+    description: |
+      Environment / platform introspection. Actions:
+        summary              → compute: host info as JSON
+        platform_only        → inline, gated on os.platform == darwin
+        home_config          → inline, gated on $HOME/.config being a dir
+        token_echo           → requires [var]; returns env.get(var) when env.has(var)
+
+      Every response is wrapped as "[<action>] <raw>" by the tool-level
+      transform.
+
+    input:
+      action:
+        type: string
+        required: true
+        description: Which action to run
+      var:
+        type: string
+        description: Env var name (required for token_echo)
+
+    handler:
+      dispatch:
+        on: action
+        cases:
+          summary:
+            handler:
+              compute:
+                cat:
+                  - "platform="
+                  - { "os.platform": [] }
+                  - " arch="
+                  - { "os.arch": [] }
+                  - " now="
+                  - { "time.now": [] }
+
+          platform_only:
+            when: { "==": [{ "os.platform": [] }, "darwin"] }
+            handler:
+              inline:
+                text: "Running on macOS"
+
+          home_config:
+            when:
+              and:
+                - { "env.has": ["HOME"] }
+                - { "file.is_dir": [{ "path.join": [{ "env.get": ["HOME"] }, ".config"] }] }
+            handler:
+              inline:
+                text: "$HOME/.config is a directory"
+
+          token_echo:
+            requires: [var]
+            when: { "env.has": [{ "var": "var" }] }
+            handler:
+              compute: { "env.get": [{ "var": "var" }] }
+
+    transform:
+      cat:
+        - "["
+        - { "var": "args.action" }
+        - "] "
+        - { "var": "result" }
