@@ -59,6 +59,60 @@ function sendRpc(
   });
 }
 
+test("tools/list and tools/call round-trip for an inline tool", { timeout: 10_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-int-"));
+  const configPath = join(dir, "jig.yaml");
+  writeFileSync(
+    configPath,
+    `server: { name: call-test, version: "0.0.1" }
+tools:
+  - name: ping
+    description: Respond with pong
+    input:
+      message: { type: string }
+    handler:
+      inline:
+        text: "pong"
+`,
+  );
+  try {
+    const responses = await sendRpc(
+      join(process.cwd(), "src/runtime/index.ts"),
+      configPath,
+      [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "t", version: "0" },
+          },
+        },
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "ping", arguments: { message: "hi" } },
+        },
+      ],
+    );
+    assert.equal(responses.length, 3);
+    const list = responses[1]!.result as { tools: Array<{ name: string }> };
+    assert.equal(list.tools.length, 1);
+    assert.equal(list.tools[0]!.name, "ping");
+
+    const call = responses[2]!.result as {
+      content: Array<{ type: string; text: string }>;
+    };
+    assert.equal(call.content[0]!.text, "pong");
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
 test("initialize returns serverInfo matching config", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "jig-int-"));
   const configPath = join(dir, "jig.yaml");
