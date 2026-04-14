@@ -166,3 +166,111 @@ test("invokeCompute returns isError when the engine throws", async () => {
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /compute:/i);
 });
+
+test("invokeDispatch with when: truthy runs the case handler", async () => {
+  const guarded: DispatchHandler = {
+    dispatch: {
+      on: "action",
+      cases: {
+        go: {
+          when: { "==": [1, 1] },
+          handler: { inline: { text: "went" } },
+        },
+      },
+    },
+  };
+  const result = await invokeDispatch(guarded, { action: "go" }, testInvoke);
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content[0]!.text, "went");
+});
+
+test("invokeDispatch with when: falsy returns isError naming the action", async () => {
+  const guarded: DispatchHandler = {
+    dispatch: {
+      on: "action",
+      cases: {
+        go: {
+          when: { "==": [1, 2] },
+          handler: { inline: { text: "went" } },
+        },
+      },
+    },
+  };
+  const result = await invokeDispatch(guarded, { action: "go" }, testInvoke);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /guard.*go/i);
+});
+
+test("invokeDispatch with when: referencing args", async () => {
+  const guarded: DispatchHandler = {
+    dispatch: {
+      on: "action",
+      cases: {
+        go: {
+          when: { "==": [{ var: "flag" }, true] },
+          handler: { inline: { text: "went" } },
+        },
+      },
+    },
+  };
+  const pass = await invokeDispatch(guarded, { action: "go", flag: true }, testInvoke);
+  assert.equal(pass.isError, undefined);
+  const block = await invokeDispatch(guarded, { action: "go", flag: false }, testInvoke);
+  assert.equal(block.isError, true);
+});
+
+test("invokeDispatch with when: AND requires: — both must pass", async () => {
+  const both: DispatchHandler = {
+    dispatch: {
+      on: "action",
+      cases: {
+        go: {
+          requires: ["id"],
+          when: { "==": [{ var: "flag" }, true] },
+          handler: { inline: { text: "went" } },
+        },
+      },
+    },
+  };
+  // Both pass
+  const ok = await invokeDispatch(
+    both,
+    { action: "go", id: "x", flag: true },
+    testInvoke,
+  );
+  assert.equal(ok.isError, undefined);
+  // when fails — report guard failure (when is checked before requires)
+  const whenFail = await invokeDispatch(
+    both,
+    { action: "go", id: "x", flag: false },
+    testInvoke,
+  );
+  assert.equal(whenFail.isError, true);
+  assert.match(whenFail.content[0]!.text, /guard/i);
+  // when passes, requires fails
+  const requiresFail = await invokeDispatch(
+    both,
+    { action: "go", flag: true },
+    testInvoke,
+  );
+  assert.equal(requiresFail.isError, true);
+  assert.match(requiresFail.content[0]!.text, /id.*required.*go/i);
+});
+
+test("invokeDispatch with when: engine error returns isError", async () => {
+  const broken: DispatchHandler = {
+    dispatch: {
+      on: "action",
+      cases: {
+        go: {
+          // Unknown operator — engine throws at evaluate time.
+          when: { unknownOperator: [1, 2] } as unknown as import("../src/runtime/util/jsonlogic.ts").JsonLogicRule,
+          handler: { inline: { text: "went" } },
+        },
+      },
+    },
+  };
+  const result = await invokeDispatch(broken, { action: "go" }, testInvoke);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /guard.*go/i);
+});
