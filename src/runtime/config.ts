@@ -20,8 +20,15 @@ export interface InlineHandler {
   inline: { text: string };
 }
 
+export interface ExecHandler {
+  exec: string;
+}
+
 export type Handler = InlineHandler;
-// Discriminated union expands in later plans: ExecHandler | HttpHandler | ...
+// Phase 4 of Plan 2 expands this to InlineHandler | ExecHandler | DispatchHandler.
+// ExecHandler is declared now so exec.ts has a shared type; it does not yet
+// appear in the Handler union because validateHandler does not yet accept
+// exec YAML. HttpHandler, GraphqlHandler, ComputeHandler land in later plans.
 
 export interface ToolDefinition {
   name: string;
