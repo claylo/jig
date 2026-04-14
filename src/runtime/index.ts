@@ -3,6 +3,10 @@ import { createServer, type ToolHandler } from "./server.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
+// Side-effect: registers the 16 built-in JSONLogic helpers per ADR-0008.
+// Keeps registration centralized at runtime boot rather than deferred
+// until a compute/when/transform rule triggers a helper lookup.
+import "./util/helpers.ts";
 
 async function main(): Promise<void> {
   const configPath = resolveConfigPath({
