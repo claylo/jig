@@ -5,7 +5,7 @@ import { createServer, type ToolHandler } from "./server.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
-import { configureAccess } from "./util/access.ts";
+import { configureAccess, isHostAllowed } from "./util/access.ts";
 import { applyTransform } from "./util/transform.ts";
 // Side-effect: registers the 16 built-in JSONLogic helpers per ADR-0008.
 // Keeps registration centralized at runtime boot rather than deferred
@@ -20,7 +20,29 @@ async function main(): Promise<void> {
   const config = loadConfigFromFile(configPath);
 
   const runtimeRoot = dirname(fileURLToPath(import.meta.url));
-  configureAccess(config.server.security ?? {}, runtimeRoot);
+  configureAccess(config.server.security ?? {}, runtimeRoot, config.connections);
+
+  // Sanity check: every declared connection's host must pass the
+  // allowlist — otherwise the author set network.allow to something
+  // that excludes their own connection, and every request through that
+  // connection would deny. Fail fast at boot.
+  if (config.connections) {
+    for (const [name, def] of Object.entries(config.connections)) {
+      let host: string;
+      try {
+        host = new URL(def.url).hostname;
+      } catch {
+        throw new Error(
+          `connections.${name}: url "${def.url}" is not a valid URL`,
+        );
+      }
+      if (!isHostAllowed(host)) {
+        throw new Error(
+          `connections.${name}: host "${host}" is not in server.security.network.allow`,
+        );
+      }
+    }
+  }
 
   const server = createServer(config);
 
