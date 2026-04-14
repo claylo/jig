@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { invokeExec } from "../src/runtime/handlers/exec.ts";
 import { invokeDispatch } from "../src/runtime/handlers/dispatch.ts";
 import { invokeCompute } from "../src/runtime/handlers/compute.ts";
+import { applyTransform } from "../src/runtime/util/transform.ts";
 import type { DispatchHandler, Handler, ComputeHandler } from "../src/runtime/config.ts";
 import type { ToolCallResult } from "../src/runtime/handlers/types.ts";
 import type { JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
@@ -273,4 +274,57 @@ test("invokeDispatch with when: engine error returns isError", async () => {
   const result = await invokeDispatch(broken, { action: "go" }, testInvoke);
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /guard.*go/i);
+});
+
+test("applyTransform reshapes handler text using {result, args}", async () => {
+  const handlerResult: ToolCallResult = {
+    content: [{ type: "text", text: "raw" }],
+  };
+  const reshaped = await applyTransform(
+    handlerResult,
+    { who: "Ada" } as Record<string, unknown>,
+    { cat: [{ var: "result" }, " / greeting for ", { var: "args.who" }] },
+  );
+  assert.equal(reshaped.isError, undefined);
+  assert.equal(reshaped.content[0]!.text, "raw / greeting for Ada");
+});
+
+test("applyTransform parses JSON result before reshaping when possible", async () => {
+  const handlerResult: ToolCallResult = {
+    content: [{ type: "text", text: '{"n":41}' }],
+  };
+  const reshaped = await applyTransform(
+    handlerResult,
+    {},
+    { "+": [{ var: "result.n" }, 1] },
+  );
+  assert.equal(reshaped.isError, undefined);
+  assert.equal(reshaped.content[0]!.text, "42");
+});
+
+test("applyTransform passes isError results through without reshaping", async () => {
+  const handlerResult: ToolCallResult = {
+    content: [{ type: "text", text: "exec: ENOENT" }],
+    isError: true,
+  };
+  const reshaped = await applyTransform(
+    handlerResult,
+    {},
+    { cat: ["should not be applied"] },
+  );
+  assert.equal(reshaped.isError, true);
+  assert.equal(reshaped.content[0]!.text, "exec: ENOENT");
+});
+
+test("applyTransform returns isError when the engine throws", async () => {
+  const handlerResult: ToolCallResult = {
+    content: [{ type: "text", text: "ok" }],
+  };
+  const reshaped = await applyTransform(
+    handlerResult,
+    {},
+    { unknownOperator: [] } as unknown as import("../src/runtime/util/jsonlogic.ts").JsonLogicRule,
+  );
+  assert.equal(reshaped.isError, true);
+  assert.match(reshaped.content[0]!.text, /transform:/i);
 });
