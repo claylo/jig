@@ -340,3 +340,140 @@ tools: []
     rmSync(dir, { recursive: true });
   }
 });
+
+import { createServer as createHttpServerInt } from "node:http";
+import type { AddressInfo as AddressInfoInt } from "node:net";
+
+test(
+  "http + graphql round-trip over stdio",
+  { timeout: 15_000 },
+  async () => {
+    // Fixture server serves /items/* and /graphql.
+    const seen: { method?: string; url?: string; body?: string; ct?: string }[] = [];
+    const server = createHttpServerInt((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        seen.push({
+          method: req.method,
+          url: req.url,
+          body,
+          ct: (req.headers["content-type"] as string | undefined) ?? "",
+        });
+        if (req.url === "/graphql") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ data: { search: [{ id: "1", name: "X" }] } }));
+        } else if (req.method === "GET" && req.url?.startsWith("/items")) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end('[{"id":"1","title":"first"}]');
+        } else {
+          res.writeHead(404);
+          res.end("not found");
+        }
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfoInt).port;
+    const fixtureUrl = `http://127.0.0.1:${port}`;
+
+    const dir = mkdtempSync(join(tmpdir(), "jig-plan4-int-"));
+    const configPath = join(dir, "jig.yaml");
+    writeFileSync(
+      configPath,
+      `server:
+  name: plan4-int
+  version: "0.0.1"
+connections:
+  rest_api:
+    url: ${fixtureUrl}
+    timeout_ms: 2000
+  graph_api:
+    url: ${fixtureUrl}/graphql
+    timeout_ms: 2000
+tools:
+  - name: example
+    description: x
+    input:
+      action: { type: string, required: true }
+      term: { type: string }
+    handler:
+      dispatch:
+        on: action
+        cases:
+          list:
+            handler:
+              http:
+                connection: rest_api
+                method: GET
+                path: "/items"
+          search:
+            handler:
+              graphql:
+                connection: graph_api
+                query: "query Search($term: String!) { search(term: $term) { id name } }"
+                variables:
+                  term: "{{term}}"
+`,
+    );
+    try {
+      const responses = await sendRpc(
+        join(process.cwd(), "src/runtime/index.ts"),
+        configPath,
+        [
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              clientInfo: { name: "t", version: "0" },
+            },
+          },
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: "example", arguments: { action: "list" } },
+          },
+          {
+            jsonrpc: "2.0",
+            id: 3,
+            method: "tools/call",
+            params: { name: "example", arguments: { action: "search", term: "jig" } },
+          },
+        ],
+      );
+      const byId = new Map<number, (typeof responses)[number]>();
+      for (const r of responses) byId.set(r.id as number, r);
+
+      const list = byId.get(2)!.result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      assert.equal(list.isError, undefined);
+      assert.match(list.content[0]!.text, /"title":"first"/);
+
+      const search = byId.get(3)!.result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      assert.equal(search.isError, undefined);
+      assert.match(search.content[0]!.text, /"name":"X"/);
+
+      // Fixture saw a GET /items and a POST /graphql with the variables.
+      const gqlCall = seen.find((s) => s.url === "/graphql")!;
+      assert.equal(gqlCall.method, "POST");
+      assert.match(gqlCall.ct!, /application\/json/);
+      const gqlBody = JSON.parse(gqlCall.body!) as {
+        query: string;
+        variables: { term: string };
+      };
+      assert.equal(gqlBody.variables.term, "jig");
+    } finally {
+      rmSync(dir, { recursive: true });
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  },
+);
