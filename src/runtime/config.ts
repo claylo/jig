@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SecurityConfig } from "./util/access.ts";
+import type { JsonLogicRule } from "./util/jsonlogic.ts";
 
 export type { SecurityConfig };
 
@@ -40,8 +41,16 @@ export interface DispatchHandler {
   };
 }
 
-export type Handler = InlineHandler | ExecHandler | DispatchHandler;
-// HttpHandler, GraphqlHandler, ComputeHandler land in later plans.
+export interface ComputeHandler {
+  compute: JsonLogicRule;
+}
+
+export type Handler =
+  | InlineHandler
+  | ExecHandler
+  | DispatchHandler
+  | ComputeHandler;
+// HttpHandler and GraphqlHandler land in Plan 4.
 
 export interface ToolDefinition {
   name: string;
@@ -239,8 +248,15 @@ function validateHandler(v: unknown, toolName: string): Handler {
     return validateDispatch(h["dispatch"], toolName);
   }
 
+  if ("compute" in h) {
+    // JSONLogic rules are arbitrary JSON; we do no structural validation
+    // at parse time. Unknown operators surface at invoke time as isError
+    // tool results, not as config errors.
+    return { compute: h["compute"] };
+  }
+
   throw new Error(
-    `config: tools[${toolName}].handler has no supported handler type (Plan 2 supports: inline, exec, dispatch)`,
+    `config: tools[${toolName}].handler has no supported handler type (Plan 3 supports: inline, exec, dispatch, compute)`,
   );
 }
 

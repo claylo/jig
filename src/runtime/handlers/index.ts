@@ -3,14 +3,15 @@ import type { ToolCallResult } from "./types.ts";
 import { invokeInline } from "./inline.ts";
 import { invokeExec } from "./exec.ts";
 import { invokeDispatch } from "./dispatch.ts";
+import { invokeCompute } from "./compute.ts";
 
 /**
  * Route a resolved Handler to the matching handler implementation.
  *
  * The function passed down to `invokeDispatch` is `invoke` itself, which
  * is what lets a dispatcher's sub-handler be another dispatcher,
- * another exec, or an inline — the invocation tree is type-agnostic at
- * this seam.
+ * another exec, a compute, or an inline — the invocation tree is
+ * type-agnostic at this seam.
  */
 export async function invoke(
   handler: Handler,
@@ -19,9 +20,9 @@ export async function invoke(
   if ("inline" in handler) return invokeInline(handler);
   if ("exec" in handler) return invokeExec(handler, args);
   if ("dispatch" in handler) return invokeDispatch(handler, args, invoke);
-  // Exhaustive type narrowing; this path is unreachable while Handler
-  // stays a union of the three. Added `never` coercion so a future
-  // handler variant surfaces as a type error instead of a runtime throw.
+  if ("compute" in handler) return invokeCompute(handler, args);
+  // Exhaustive type narrowing; adding a new Handler variant without a
+  // new arm here becomes a compile error at this line.
   const _never: never = handler;
   throw new Error(`invoke: no handler implementation for ${JSON.stringify(_never)}`);
 }

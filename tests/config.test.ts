@@ -210,3 +210,18 @@ tools: []
 `;
   assert.throws(() => parseConfig(yaml), /security: unknown key "network"/);
 });
+
+test("parseConfig accepts a tool with a compute handler", () => {
+  const yaml = `
+server: { name: c, version: "0.1.0" }
+tools:
+  - name: now
+    description: current time
+    handler:
+      compute: { "time.now": [] }
+`;
+  const config = parseConfig(yaml);
+  const handler = config.tools[0]!.handler;
+  assert.ok("compute" in handler);
+  assert.deepEqual((handler as { compute: unknown }).compute, { "time.now": [] });
+});
