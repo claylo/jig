@@ -6,6 +6,7 @@ import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
 import { configureAccess } from "./util/access.ts";
+import { applyTransform } from "./util/transform.ts";
 // Side-effect: registers the 16 built-in JSONLogic helpers per ADR-0008.
 // Keeps registration centralized at runtime boot rather than deferred
 // until a compute/when/transform rule triggers a helper lookup.
@@ -27,8 +28,12 @@ async function main(): Promise<void> {
   // is what lets a dispatch tool reach exec, inline, or nested dispatch
   // without index.ts knowing the handler types.
   for (const tool of config.tools) {
-    const handler: ToolHandler = async (args: unknown) =>
-      invoke(tool.handler, normalizeArgs(args));
+    const handler: ToolHandler = async (args: unknown) => {
+      const normalized = normalizeArgs(args);
+      const raw = await invoke(tool.handler, normalized);
+      if (tool.transform === undefined) return raw;
+      return applyTransform(raw, normalized, tool.transform);
+    };
     server.registerTool(
       tool.name,
       {

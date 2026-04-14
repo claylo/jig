@@ -58,6 +58,7 @@ export interface ToolDefinition {
   description: string;
   input?: Record<string, InputFieldSchema>;
   handler: Handler;
+  transform?: JsonLogicRule;
 }
 
 export interface JigConfig {
@@ -185,12 +186,19 @@ function validateTool(entry: unknown, index: number): ToolDefinition {
     throw new Error(`config: tools[${index}].handler is required`);
   }
   const handler = validateHandler(t["handler"], t["name"]);
-  return {
+  const transformRaw = t["transform"];
+  const tool: ToolDefinition = {
     name: t["name"],
     description: t["description"],
     input: validateInput(t["input"], t["name"]),
     handler,
   };
+  if (transformRaw !== undefined) {
+    // No structural validation — any valid JSONLogic is accepted. Engine
+    // errors at invocation time become isError tool results.
+    tool.transform = transformRaw as JsonLogicRule;
+  }
+  return tool;
 }
 
 function validateInput(

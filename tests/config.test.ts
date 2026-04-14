@@ -225,3 +225,22 @@ tools:
   assert.ok("compute" in handler);
   assert.deepEqual((handler as { compute: unknown }).compute, { "time.now": [] });
 });
+
+test("parseConfig accepts a tool with a transform", () => {
+  const yaml = `
+server: { name: t, version: "0.1.0" }
+tools:
+  - name: wrap
+    description: demo
+    handler:
+      inline: { text: "raw" }
+    transform:
+      cat: ["wrapped(", { var: "result" }, ")"]
+`;
+  const config = parseConfig(yaml);
+  const tool = config.tools[0]!;
+  assert.ok(tool.transform);
+  assert.deepEqual(tool.transform, {
+    cat: ["wrapped(", { var: "result" }, ")"],
+  });
+});
