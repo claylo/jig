@@ -1,0 +1,22 @@
+{
+  "name": "jig",
+  "version": "1.0.0-alpha.0",
+  "description": "YAML-driven single-file MCP server packaging tool",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test --experimental-transform-types 'tests/**/*.test.ts'",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0-alpha.2",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}
