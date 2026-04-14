@@ -153,3 +153,60 @@ tools:
     rmSync(dir, { recursive: true });
   }
 });
+
+test("parseConfig treats missing security block as undefined (defaults applied at configureAccess)", () => {
+  const yaml = `
+server: { name: s, version: "0.1.0" }
+tools: []
+`;
+  const config = parseConfig(yaml);
+  assert.equal(config.server.security, undefined);
+});
+
+test("parseConfig accepts a full security block", () => {
+  const yaml = `
+server:
+  name: s
+  version: "0.1.0"
+  security:
+    filesystem:
+      allow:
+        - "."
+        - "$HOME/.config"
+    env:
+      allow:
+        - "JIG_*"
+        - "HOME"
+tools: []
+`;
+  const config = parseConfig(yaml);
+  assert.ok(config.server.security);
+  assert.deepEqual(config.server.security.filesystem?.allow, [".", "$HOME/.config"]);
+  assert.deepEqual(config.server.security.env?.allow, ["JIG_*", "HOME"]);
+});
+
+test("parseConfig rejects non-array security.filesystem.allow", () => {
+  const yaml = `
+server:
+  name: s
+  version: "0.1.0"
+  security:
+    filesystem:
+      allow: "not-an-array"
+tools: []
+`;
+  assert.throws(() => parseConfig(yaml), /security\.filesystem\.allow/);
+});
+
+test("parseConfig rejects unknown top-level security keys", () => {
+  const yaml = `
+server:
+  name: s
+  version: "0.1.0"
+  security:
+    network:
+      allow: []
+tools: []
+`;
+  assert.throws(() => parseConfig(yaml), /security: unknown key "network"/);
+});

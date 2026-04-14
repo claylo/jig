@@ -1,8 +1,11 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
 import { createServer, type ToolHandler } from "./server.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
+import { configureAccess } from "./util/access.ts";
 // Side-effect: registers the 16 built-in JSONLogic helpers per ADR-0008.
 // Keeps registration centralized at runtime boot rather than deferred
 // until a compute/when/transform rule triggers a helper lookup.
@@ -14,6 +17,9 @@ async function main(): Promise<void> {
     runtimeUrl: import.meta.url,
   });
   const config = loadConfigFromFile(configPath);
+
+  const runtimeRoot = dirname(fileURLToPath(import.meta.url));
+  configureAccess(config.server.security ?? {}, runtimeRoot);
 
   const server = createServer(config);
 

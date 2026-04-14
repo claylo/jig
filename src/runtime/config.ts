@@ -2,12 +2,16 @@ import { parse as parseYaml } from "yaml";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { SecurityConfig } from "./util/access.ts";
+
+export type { SecurityConfig };
 
 export interface ServerMetadata {
   name: string;
   version: string;
   description?: string;
   instructions?: string;
+  security?: SecurityConfig;
 }
 
 export interface InputFieldSchema {
@@ -80,7 +84,72 @@ function validateServer(v: unknown): ServerMetadata {
     version: s["version"],
     description: typeof s["description"] === "string" ? s["description"] : undefined,
     instructions: typeof s["instructions"] === "string" ? s["instructions"] : undefined,
+    security: validateSecurity(s["security"]),
   };
+}
+
+/**
+ * Validate and return a SecurityConfig from raw parsed YAML. Stores raw
+ * strings — $VAR / ~ / . expansion happens in configureAccess at boot.
+ */
+function validateSecurity(v: unknown): SecurityConfig | undefined {
+  if (v === undefined) return undefined;
+  if (!v || typeof v !== "object") {
+    throw new Error("config: server.security must be a mapping");
+  }
+  const sec = v as Record<string, unknown>;
+
+  // Reject unknown top-level keys
+  const knownKeys = new Set(["filesystem", "env"]);
+  for (const key of Object.keys(sec)) {
+    if (!knownKeys.has(key)) {
+      throw new Error(`config: security: unknown key "${key}"`);
+    }
+  }
+
+  const result: SecurityConfig = {};
+
+  if (sec["filesystem"] !== undefined) {
+    if (!sec["filesystem"] || typeof sec["filesystem"] !== "object") {
+      throw new Error("config: security.filesystem must be a mapping");
+    }
+    const fs = sec["filesystem"] as Record<string, unknown>;
+    if (fs["allow"] !== undefined) {
+      if (!Array.isArray(fs["allow"])) {
+        throw new Error("config: security.filesystem.allow must be an array of strings");
+      }
+      for (const entry of fs["allow"]) {
+        if (typeof entry !== "string" || entry.length === 0) {
+          throw new Error("config: security.filesystem.allow entries must be non-empty strings");
+        }
+      }
+      result.filesystem = { allow: fs["allow"] as string[] };
+    } else {
+      result.filesystem = {};
+    }
+  }
+
+  if (sec["env"] !== undefined) {
+    if (!sec["env"] || typeof sec["env"] !== "object") {
+      throw new Error("config: security.env must be a mapping");
+    }
+    const env = sec["env"] as Record<string, unknown>;
+    if (env["allow"] !== undefined) {
+      if (!Array.isArray(env["allow"])) {
+        throw new Error("config: security.env.allow must be an array of strings");
+      }
+      for (const entry of env["allow"]) {
+        if (typeof entry !== "string" || entry.length === 0) {
+          throw new Error("config: security.env.allow entries must be non-empty strings");
+        }
+      }
+      result.env = { allow: env["allow"] as string[] };
+    } else {
+      result.env = {};
+    }
+  }
+
+  return result;
 }
 
 function validateTools(v: unknown): ToolDefinition[] {

@@ -3,6 +3,7 @@ import { dirname, join as pathJoin, resolve as pathResolve, basename, isAbsolute
 import { fileURLToPath } from "node:url";
 import { platform, arch, homedir, tmpdir } from "node:os";
 import { getEngine } from "./jsonlogic.ts";
+import { isPathAllowed, isEnvAllowed } from "./access.ts";
 
 /**
  * Built-in JSONLogic helpers per ADR-0008 (16 helpers across 5 namespaces).
@@ -13,26 +14,25 @@ import { getEngine } from "./jsonlogic.ts";
  *   - Resolves relative paths against dirname(import.meta.url) per ADR-0005
  *   - Is side-effect-free (read-only)
  *
+ * File and env helpers are gated by access controls per ADR-0009.
+ * path.* helpers are pure string ops — no disk read, no gate.
+ *
  * This module registers against the shared engine from util/jsonlogic.ts
  * at import time. Callers pull in this module for its side effects.
  */
 
-// Server-root fallback. When authors pass a relative path to a file/path
-// helper, resolve it against the directory the runtime lives in — the
-// same rule as ADR-0005 for sibling YAML discovery.
+// Used ONLY by path.resolve for relative-to-runtime anchoring (pure string op,
+// not a disk read — no allowlist concern). File helpers route through access.ts.
 const RUNTIME_ROOT = dirname(fileURLToPath(import.meta.url));
-
-function resolveRelative(input: string): string {
-  if (isAbsolute(input)) return input;
-  return pathResolve(RUNTIME_ROOT, input);
-}
 
 // --- file namespace -------------------------------------------------------
 
 function fileExists([rawPath]: unknown[]): boolean {
   if (typeof rawPath !== "string" || rawPath.length === 0) return false;
+  const canonical = isPathAllowed(rawPath);
+  if (canonical === null) return false;
   try {
-    accessSync(resolveRelative(rawPath), fsConstants.F_OK);
+    accessSync(canonical, fsConstants.F_OK);
     return true;
   } catch {
     return false;
@@ -41,8 +41,10 @@ function fileExists([rawPath]: unknown[]): boolean {
 
 function fileIsFile([rawPath]: unknown[]): boolean {
   if (typeof rawPath !== "string" || rawPath.length === 0) return false;
+  const canonical = isPathAllowed(rawPath);
+  if (canonical === null) return false;
   try {
-    return statSync(resolveRelative(rawPath)).isFile();
+    return statSync(canonical).isFile();
   } catch {
     return false;
   }
@@ -50,8 +52,10 @@ function fileIsFile([rawPath]: unknown[]): boolean {
 
 function fileIsDir([rawPath]: unknown[]): boolean {
   if (typeof rawPath !== "string" || rawPath.length === 0) return false;
+  const canonical = isPathAllowed(rawPath);
+  if (canonical === null) return false;
   try {
-    return statSync(resolveRelative(rawPath)).isDirectory();
+    return statSync(canonical).isDirectory();
   } catch {
     return false;
   }
@@ -59,8 +63,10 @@ function fileIsDir([rawPath]: unknown[]): boolean {
 
 function fileSize([rawPath]: unknown[]): number | null {
   if (typeof rawPath !== "string" || rawPath.length === 0) return null;
+  const canonical = isPathAllowed(rawPath);
+  if (canonical === null) return null;
   try {
-    return statSync(resolveRelative(rawPath)).size;
+    return statSync(canonical).size;
   } catch {
     return null;
   }
@@ -70,12 +76,14 @@ function fileSize([rawPath]: unknown[]): number | null {
 
 function envGet([rawName]: unknown[]): string | null {
   if (typeof rawName !== "string" || rawName.length === 0) return null;
+  if (!isEnvAllowed(rawName)) return null;
   const value = process.env[rawName];
   return value === undefined ? null : value;
 }
 
 function envHas([rawName]: unknown[]): boolean {
   if (typeof rawName !== "string" || rawName.length === 0) return false;
+  if (!isEnvAllowed(rawName)) return false;
   return Object.prototype.hasOwnProperty.call(process.env, rawName);
 }
 
@@ -98,7 +106,9 @@ function pathJoinHelper(parts: unknown[]): string | null {
 function pathResolveHelper([rawPath]: unknown[]): string | null {
   if (typeof rawPath !== "string" || rawPath.length === 0) return null;
   try {
-    return resolveRelative(rawPath);
+    // Pure string op — anchor relative paths to RUNTIME_ROOT. No disk read.
+    if (isAbsolute(rawPath)) return rawPath;
+    return pathResolve(RUNTIME_ROOT, rawPath);
   } catch {
     return null;
   }
