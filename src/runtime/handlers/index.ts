@@ -6,6 +6,7 @@ import { invokeExec } from "./exec.ts";
 import { invokeDispatch } from "./dispatch.ts";
 import { invokeCompute } from "./compute.ts";
 import { invokeHttp } from "./http.ts";
+import { invokeGraphql } from "./graphql.ts";
 
 export interface InvokeContext {
   connections: Record<string, CompiledConnection>;
@@ -26,6 +27,7 @@ export async function invoke(
   }
   if ("compute" in handler) return invokeCompute(handler, args);
   if ("http" in handler) return invokeHttp(handler, args, ctx.connections);
+  if ("graphql" in handler) return invokeGraphql(handler, args, ctx.connections);
   const _never: never = handler;
   throw new Error(`invoke: no handler implementation for ${JSON.stringify(_never)}`);
 }

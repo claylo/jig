@@ -312,3 +312,55 @@ tools:
 `;
   assert.throws(() => parseConfig(yamlText), /http: unknown key "respons"/);
 });
+
+test("config accepts a graphql handler", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+connections:
+  api:
+    url: https://example.com
+tools:
+  - name: t1
+    description: x
+    handler:
+      graphql:
+        connection: api
+        query: "query { x }"
+`;
+  const cfg = parseConfig(yamlText);
+  const h = cfg.tools[0]!.handler as { graphql: { connection: string; query: string } };
+  assert.equal(h.graphql.connection, "api");
+  assert.match(h.graphql.query, /^query/);
+});
+
+test("config rejects graphql without a query", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+connections: { api: { url: https://example.com } }
+tools:
+  - name: t1
+    description: x
+    handler:
+      graphql:
+        connection: api
+`;
+  assert.throws(() => parseConfig(yamlText), /graphql\.query/);
+});
+
+test("config rejects graphql with unknown keys", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+connections:
+  api:
+    url: https://example.com
+tools:
+  - name: t1
+    description: x
+    handler:
+      graphql:
+        connection: api
+        query: "{ x }"
+        bogus: x
+`;
+  assert.throws(() => parseConfig(yamlText), /graphql: unknown key "bogus"/);
+});
