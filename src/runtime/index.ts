@@ -1,6 +1,6 @@
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
 import { createServer, type ToolHandler } from "./server.ts";
-import { invokeInline } from "./handlers/inline.ts";
+import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
 
@@ -13,26 +13,12 @@ async function main(): Promise<void> {
 
   const server = createServer(config);
 
-  // Plan 1 registers each YAML tool directly on McpServer — no intermediate
-  // registry. The SDK's McpServer already owns the name → tool map and
-  // wires tools/list + tools/call on the first registerTool call
-  // (index.mjs:1335 → setToolRequestHandlers). Introducing our own
-  // ToolRegistry class here would duplicate that with no benefit.
-  //
-  // Plan 1 supports only the `inline` handler. When additional handler
-  // types land (exec, http, graphql, dispatch, compute in Plan 2+), this
-  // loop routes into a dispatcher rather than growing into a switch.
+  // Each tool's handler gets routed through the central invoke(). That
+  // is what lets a dispatch tool reach exec, inline, or nested dispatch
+  // without index.ts knowing the handler types.
   for (const tool of config.tools) {
-    // Phase 3 interim: the Handler union now admits DispatchHandler, but
-    // validateHandler still only produces InlineHandler. Narrow before
-    // dispatching; Phase 4 replaces this with a central invoke().
-    const toolHandler = tool.handler;
-    const handler: ToolHandler = async (_args: unknown) => {
-      if ("inline" in toolHandler) return invokeInline(toolHandler);
-      throw new Error(
-        `runtime: tool "${tool.name}" has a handler type not yet reachable from config parsing`,
-      );
-    };
+    const handler: ToolHandler = async (args: unknown) =>
+      invoke(tool.handler, normalizeArgs(args));
     server.registerTool(
       tool.name,
       {
@@ -44,6 +30,20 @@ async function main(): Promise<void> {
   }
 
   await server.connect(createStdioTransport());
+}
+
+/**
+ * The SDK hands our handler whatever the client sent as
+ * `tools/call.params.arguments` — typed as `unknown` at the adapter
+ * boundary. In practice MCP clients send a JSON object (or nothing).
+ * Normalize both shapes to `Record<string, unknown>` so handlers can
+ * read fields without defensive checks at every call site.
+ */
+function normalizeArgs(args: unknown): Record<string, unknown> {
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    return args as Record<string, unknown>;
+  }
+  return {};
 }
 
 main().catch((err: unknown) => {
