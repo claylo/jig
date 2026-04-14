@@ -1,0 +1,119 @@
+# A Plan 4 example that exercises connections + http + graphql
+# together with dispatch and transform. Demonstrates:
+#   - connections: declaring two upstream endpoints, one for REST and
+#     one for GraphQL, with ${VAR} env interpolation in headers
+#   - http: GET composing path + query against args
+#   - graphql: POST with variables built from args
+#   - transform: wrapping every response in a uniform envelope
+#
+# Run with just smoke-http (spins up a fixture server the recipe hosts)
+# or against a real environment where JIG_EXAMPLE_TOKEN points at a
+# valid API token and the allowlists cover api.example.invalid.
+
+server:
+  name: jig-plan4-example
+  version: "1.0.0"
+  description: |
+    Demonstrates Plan 4: connections, http handler, graphql handler,
+    network host confinement, and ${VAR} shim. Plan 4 smoke target.
+
+  security:
+    env:
+      allow:
+        - "JIG_*"
+    # network.allow is omitted: allowlist is inferred from connections
+    # below. api.example.invalid is the only reachable host until a
+    # different allowlist is declared.
+
+connections:
+  rest_api:
+    url: https://api.example.invalid
+    headers:
+      Accept: "application/json"
+      Authorization: "Bearer ${JIG_EXAMPLE_TOKEN}"
+    timeout_ms: 5000
+  graph_api:
+    url: https://api.example.invalid/graphql
+    headers:
+      Authorization: "Bearer ${JIG_EXAMPLE_TOKEN}"
+    timeout_ms: 5000
+
+tools:
+  - name: example
+    description: |
+      Actions:
+        list       → GET /items?limit=10 via rest_api
+        show       → GET /items/{{id}} via rest_api, requires id
+        create     → POST /items via rest_api with a JSON body
+        search     → graphql: query($term: String!) { search(term: $term) }
+        help       → inline text listing the actions
+
+    input:
+      action:
+        type: string
+        required: true
+      id:
+        type: string
+      term:
+        type: string
+      title:
+        type: string
+
+    handler:
+      dispatch:
+        on: action
+        cases:
+          list:
+            handler:
+              http:
+                connection: rest_api
+                method: GET
+                path: "/items"
+                query: { limit: "10" }
+
+          show:
+            requires: [id]
+            handler:
+              http:
+                connection: rest_api
+                method: GET
+                path: "/items/{{id}}"
+
+          create:
+            requires: [title]
+            handler:
+              http:
+                connection: rest_api
+                method: POST
+                path: "/items"
+                body:
+                  title: "{{title}}"
+                  source: "jig"
+
+          search:
+            requires: [term]
+            handler:
+              graphql:
+                connection: graph_api
+                query: |
+                  query Search($term: String!) { search(term: $term) { id name } }
+                variables:
+                  term: "{{term}}"
+
+          help:
+            handler:
+              inline:
+                text: |
+                  example: { list | show | create | search | help }
+                    list               no args
+                    show               requires id
+                    create             requires title
+                    search             requires term
+                    help               always valid
+
+    transform:
+      cat:
+        - "["
+        - { "var": "args.action" }
+        - "] "
+        - { "var": "result" }
