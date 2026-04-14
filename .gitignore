@@ -1,6 +1,8 @@
 node_modules/
-dist/
+dist/  # for release assets like release postcards
+build/ # for built assets
 *.log
 .DS_Store
 *.tsbuildinfo
 .claude/
+.private-journal/
