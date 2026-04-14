@@ -1,0 +1,58 @@
+# A dispatcher-style jig example with exec sub-handlers.
+#
+# Demonstrates Plan 2's features:
+#   - one tool, one `action` enum, per-action requires:
+#   - exec handler with Mustache-rendered command lines
+#   - inline handler as a no-op default
+#
+# The `help` action shows the shape without requiring any external
+# handlers — callers can run it first to see what's available.
+
+server:
+  name: jig-dispatcher
+  version: "1.0.0"
+  description: |
+    Demonstrates the dispatcher pattern — one tool, multiple actions,
+    typed flat inputs. This is the Plan 2 smoke target.
+
+tools:
+  - name: greet
+    description: |
+      A greeting tool. Actions: say, count, help.
+
+      {"action": "say", "name": "Ada"}    → "Hello, Ada!"
+      {"action": "count", "text": "hi"}   → the length of `text`
+      {"action": "help"}                  → this description
+
+    input:
+      action:
+        type: string
+        required: true
+        description: Which action to run (say | count | help)
+      name:
+        type: string
+        description: Who to greet (required for `say`)
+      text:
+        type: string
+        description: Text to measure (required for `count`)
+
+    handler:
+      dispatch:
+        on: action
+        cases:
+          say:
+            requires: [name]
+            handler:
+              exec: "/bin/echo Hello, {{name}}!"
+          count:
+            requires: [text]
+            handler:
+              exec: "/usr/bin/awk BEGIN{print length(\"{{text}}\")}"
+          help:
+            handler:
+              inline:
+                text: |
+                  greet: { say | count | help }
+                    say  requires `name`
+                    count requires `text`
+                    help  always valid
