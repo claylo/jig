@@ -6,12 +6,24 @@ import { platform as nodePlatform, arch as nodeArch, homedir, tmpdir } from "nod
 import { evaluate, type JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
 // Side-effect import: registers the 16 helpers on the shared engine.
 import "../src/runtime/util/helpers.ts";
+import { configureAccess } from "../src/runtime/util/access.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = join(HERE, "fixtures", "helpers");
 const PRESENT_FILE = join(FIXTURE_DIR, "present.txt");
 const MISSING_FILE = join(FIXTURE_DIR, "definitely-missing.txt");
 const SUBDIR = join(FIXTURE_DIR, "subdir");
+
+// Scope: tests use fixture files under FIXTURE_DIR and env vars prefixed
+// with JIG_HELPERS_TEST_. Configure access to allow exactly those, nothing
+// more — so tests also prove denial semantics work.
+configureAccess(
+  {
+    filesystem: { allow: [FIXTURE_DIR] },
+    env: { allow: ["JIG_HELPERS_TEST_*", "HOME", "USER", "LANG", "LC_*", "TZ", "PATH"] },
+  },
+  FIXTURE_DIR, // runtimeRoot is the fixture dir for the purposes of these tests
+);
 
 // --- file namespace -------------------------------------------------------
 
@@ -181,5 +193,64 @@ test("helpers compose: file.exists(path.join(env.get(HOME), x))", async () => {
     assert.equal(await evaluate(rule, {}), true);
   } finally {
     delete process.env["JIG_HELPERS_TEST_ROOT"];
+  }
+});
+
+// --- access controls ------------------------------------------------------
+
+test("file.exists returns false for an absolute path outside the allowlist", async () => {
+  // /etc is not in the allowlist — the PHP-era probe gets denied.
+  const rule: JsonLogicRule = { "file.exists": ["/etc/passwd"] };
+  assert.equal(await evaluate(rule, {}), false);
+});
+
+test("file.size returns null for an absolute path outside the allowlist", async () => {
+  const rule: JsonLogicRule = { "file.size": ["/etc/passwd"] };
+  assert.equal(await evaluate(rule, {}), null);
+});
+
+test("file.exists follows symlinks and denies escape from the allowlist", async () => {
+  // Plant a symlink inside the allowed dir pointing outside it.
+  const { symlinkSync, unlinkSync } = await import("node:fs");
+  const linkPath = join(FIXTURE_DIR, "escape-link");
+  try {
+    // Clean up any stale link from a prior run.
+    try { unlinkSync(linkPath); } catch { /* not there */ }
+    symlinkSync("/etc/passwd", linkPath);
+    const rule: JsonLogicRule = { "file.exists": [linkPath] };
+    // Real path is /etc/passwd — outside allowlist → denied.
+    assert.equal(await evaluate(rule, {}), false);
+  } finally {
+    try { unlinkSync(linkPath); } catch { /* ignore */ }
+  }
+});
+
+test("env.get returns null for a var not matching the allowlist patterns", async () => {
+  process.env["NOT_ALLOWED_VAR_ABCDEFG"] = "leaked";
+  try {
+    const result = await evaluate({ "env.get": ["NOT_ALLOWED_VAR_ABCDEFG"] } as JsonLogicRule, {});
+    assert.equal(result, null);
+  } finally {
+    delete process.env["NOT_ALLOWED_VAR_ABCDEFG"];
+  }
+});
+
+test("env.has returns false for a var not matching the allowlist patterns", async () => {
+  process.env["NOT_ALLOWED_VAR_XYZ"] = "present";
+  try {
+    const result = await evaluate({ "env.has": ["NOT_ALLOWED_VAR_XYZ"] } as JsonLogicRule, {});
+    assert.equal(result, false);
+  } finally {
+    delete process.env["NOT_ALLOWED_VAR_XYZ"];
+  }
+});
+
+test("env.has matches wildcard patterns (JIG_HELPERS_TEST_* covers JIG_HELPERS_TEST_WILD)", async () => {
+  process.env["JIG_HELPERS_TEST_WILD"] = "yes";
+  try {
+    const result = await evaluate({ "env.has": ["JIG_HELPERS_TEST_WILD"] } as JsonLogicRule, {});
+    assert.equal(result, true);
+  } finally {
+    delete process.env["JIG_HELPERS_TEST_WILD"];
   }
 });
