@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { invokeExec } from "../src/runtime/handlers/exec.ts";
 import { invokeDispatch } from "../src/runtime/handlers/dispatch.ts";
 import { invokeCompute } from "../src/runtime/handlers/compute.ts";
@@ -9,6 +11,21 @@ import type { ToolCallResult } from "../src/runtime/handlers/types.ts";
 import type { JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
 // Side-effect: ensures helpers are registered before the compute tests run.
 import "../src/runtime/util/helpers.ts";
+import { configureAccess, resetAccessForTests } from "../src/runtime/util/access.ts";
+import { invokeHttp } from "../src/runtime/handlers/http.ts";
+import { compileConnections } from "../src/runtime/connections.ts";
+
+async function startHandlerFixture(
+  handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void,
+) {
+  const server = createHttpServer(handler);
+  await new Promise<void>((res) => server.listen(0, "127.0.0.1", res));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
 
 test("invokeExec returns stdout from /bin/echo as text content", async () => {
   const result = await invokeExec({ exec: "/bin/echo hello" }, {});
@@ -327,4 +344,236 @@ test("applyTransform returns isError when the engine throws", async () => {
   );
   assert.equal(reshaped.isError, true);
   assert.match(reshaped.content[0]!.text, /transform:/i);
+});
+
+test("invokeHttp GETs the composed URL and returns body", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenUrl = "";
+  const fix = await startHandlerFixture((req, res) => {
+    seenUrl = req.url ?? "";
+    res.writeHead(200);
+    res.end("body-ok");
+  });
+  try {
+    const compiled = compileConnections({
+      api: { url: fix.url },
+    });
+    const result = await invokeHttp(
+      {
+        http: { connection: "api", method: "GET", path: "/{{slug}}" },
+      },
+      { slug: "hello" },
+      compiled,
+    );
+    assert.equal(result.isError, undefined);
+    assert.equal(seenUrl, "/hello");
+    assert.equal(result.content[0]!.text, "body-ok");
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeHttp merges connection + handler headers, handler wins on conflict", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenHeaders: Record<string, string | string[] | undefined> = {};
+  const fix = await startHandlerFixture((req, res) => {
+    seenHeaders = req.headers;
+    res.writeHead(200);
+    res.end("");
+  });
+  try {
+    const compiled = compileConnections({
+      api: {
+        url: fix.url,
+        headers: {
+          "X-Connection": "conn-value",
+          "X-Conflict": "conn-wins?",
+        },
+      },
+    });
+    await invokeHttp(
+      {
+        http: {
+          connection: "api",
+          method: "GET",
+          headers: { "X-Conflict": "handler-wins", "X-Handler": "h-{{id}}" },
+        },
+      },
+      { id: "42" },
+      compiled,
+    );
+    assert.equal(seenHeaders["x-connection"], "conn-value");
+    assert.equal(seenHeaders["x-conflict"], "handler-wins");
+    assert.equal(seenHeaders["x-handler"], "h-42");
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeHttp serializes a body mapping as JSON with Content-Type", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenBody = "";
+  let seenCT = "";
+  const fix = await startHandlerFixture((req, res) => {
+    seenCT = (req.headers["content-type"] as string | undefined) ?? "";
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      seenBody = Buffer.concat(chunks).toString("utf8");
+      res.writeHead(201);
+      res.end("{}");
+    });
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    await invokeHttp(
+      {
+        http: {
+          connection: "api",
+          method: "POST",
+          path: "/items",
+          body: { title: "{{title}}", tags: ["{{tag}}", "static"] },
+        },
+      },
+      { title: "hello", tag: "triage" },
+      compiled,
+    );
+    assert.match(seenCT, /application\/json/);
+    const parsed = JSON.parse(seenBody) as { title: string; tags: string[] };
+    assert.equal(parsed.title, "hello");
+    assert.deepEqual(parsed.tags, ["triage", "static"]);
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeHttp sends a raw body when body is a string", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenBody = "";
+  const fix = await startHandlerFixture((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      seenBody = Buffer.concat(chunks).toString("utf8");
+      res.writeHead(200);
+      res.end("");
+    });
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    await invokeHttp(
+      {
+        http: {
+          connection: "api",
+          method: "POST",
+          body: "key={{key}}&val={{val}}",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        },
+      },
+      { key: "k", val: "v" },
+      compiled,
+    );
+    assert.equal(seenBody, "key=k&val=v");
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeHttp URL-encodes query params against args", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenUrl = "";
+  const fix = await startHandlerFixture((req, res) => {
+    seenUrl = req.url ?? "";
+    res.writeHead(200);
+    res.end("");
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    await invokeHttp(
+      {
+        http: {
+          connection: "api",
+          method: "GET",
+          path: "/search",
+          query: { q: "{{term}}", per_page: "30" },
+        },
+      },
+      { term: "hello world" },
+      compiled,
+    );
+    assert.match(seenUrl, /\/search\?/);
+    assert.match(seenUrl, /q=hello(\+|%20)world/);
+    assert.match(seenUrl, /per_page=30/);
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeHttp denies an unknown connection name", async () => {
+  const compiled = compileConnections({});
+  const result = await invokeHttp(
+    { http: { connection: "missing", method: "GET" } },
+    {},
+    compiled,
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /unknown connection "missing"/);
+});
+
+test("invokeHttp returns envelope when response: envelope", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  const fix = await startHandlerFixture((_req, res) => {
+    res.writeHead(418, { "X-Trace": "t" });
+    res.end("short and stout");
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    const result = await invokeHttp(
+      {
+        http: { connection: "api", method: "GET", response: "envelope" },
+      },
+      {},
+      compiled,
+    );
+    assert.equal(result.isError, undefined);
+    const env = JSON.parse(result.content[0]!.text) as {
+      status: number;
+      headers: Record<string, string>;
+      body: string;
+    };
+    assert.equal(env.status, 418);
+    assert.equal(env.body, "short and stout");
+    assert.equal(env.headers["x-trace"], "t");
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeHttp uses handler url directly when no connection", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenUrl = "";
+  const fix = await startHandlerFixture((req, res) => {
+    seenUrl = req.url ?? "";
+    res.writeHead(200);
+    res.end("direct");
+  });
+  try {
+    const result = await invokeHttp(
+      { http: { url: fix.url + "/direct", method: "GET" } },
+      {},
+      {},
+    );
+    assert.equal(result.isError, undefined);
+    assert.equal(seenUrl, "/direct");
+    assert.equal(result.content[0]!.text, "direct");
+  } finally {
+    await fix.close();
+  }
 });

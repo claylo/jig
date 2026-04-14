@@ -243,3 +243,72 @@ tools:
     cat: ["wrapped(", { var: "result" }, ")"],
   });
 });
+
+test("config accepts an http handler with connection + method", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+connections:
+  api:
+    url: https://example.com
+tools:
+  - name: t1
+    description: x
+    handler:
+      http:
+        connection: api
+        method: GET
+        path: "/thing"
+`;
+  const cfg = parseConfig(yamlText);
+  const h = cfg.tools[0]!.handler as { http: { method: string; path?: string } };
+  assert.equal(h.http.method, "GET");
+  assert.equal(h.http.path, "/thing");
+});
+
+test("config rejects http without connection or url", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: t1
+    description: x
+    handler:
+      http:
+        method: GET
+`;
+  assert.throws(() => parseConfig(yamlText), /http requires either connection or url/);
+});
+
+test("config rejects http with invalid method", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: t1
+    description: x
+    handler:
+      http:
+        connection: api
+        method: BOGUS
+connections:
+  api:
+    url: https://example.com
+`;
+  assert.throws(() => parseConfig(yamlText), /http\.method/);
+});
+
+test("config rejects http with unknown keys", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+connections:
+  api:
+    url: https://example.com
+tools:
+  - name: t1
+    description: x
+    handler:
+      http:
+        connection: api
+        method: GET
+        respons: envelope
+`;
+  assert.throws(() => parseConfig(yamlText), /http: unknown key "respons"/);
+});

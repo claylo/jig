@@ -47,12 +47,29 @@ export interface ComputeHandler {
   compute: JsonLogicRule;
 }
 
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface HttpHandler {
+  http: {
+    connection?: string;
+    method: HttpMethod;
+    path?: string;
+    url?: string;
+    query?: Record<string, string>;
+    headers?: Record<string, string>;
+    body?: unknown; // string for raw, mapping for JSON auto-serialize
+    response?: "body" | "envelope";
+    timeout_ms?: number;
+  };
+}
+
 export type Handler =
   | InlineHandler
   | ExecHandler
   | DispatchHandler
-  | ComputeHandler;
-// HttpHandler and GraphqlHandler land in Plan 4.
+  | ComputeHandler
+  | HttpHandler;
+// GraphqlHandler lands in Phase 6.
 
 export interface ToolDefinition {
   name: string;
@@ -303,8 +320,12 @@ function validateHandler(v: unknown, toolName: string): Handler {
     return { compute: h["compute"] };
   }
 
+  if (h["http"] && typeof h["http"] === "object") {
+    return validateHttp(h["http"], toolName);
+  }
+
   throw new Error(
-    `config: tools[${toolName}].handler has no supported handler type (Plan 3 supports: inline, exec, dispatch, compute)`,
+    `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http)`,
   );
 }
 
@@ -386,6 +407,98 @@ export function resolveConfigPath(args: ResolveArgs): string {
 export function loadConfigFromFile(path: string): JigConfig {
   const text = readFileSync(path, "utf8");
   return parseConfig(text);
+}
+
+function validateHttp(v: unknown, toolName: string): HttpHandler {
+  const h = v as Record<string, unknown>;
+  const method = h["method"];
+  const validMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+  if (typeof method !== "string" || !validMethods.has(method)) {
+    throw new Error(
+      `config: tools[${toolName}].handler.http.method must be one of GET, POST, PUT, PATCH, DELETE`,
+    );
+  }
+  const connection = h["connection"];
+  const url = h["url"];
+  if (connection === undefined && url === undefined) {
+    throw new Error(
+      `config: tools[${toolName}].handler.http requires either connection or url`,
+    );
+  }
+  if (connection !== undefined && typeof connection !== "string") {
+    throw new Error(`config: tools[${toolName}].handler.http.connection must be a string`);
+  }
+  if (url !== undefined && typeof url !== "string") {
+    throw new Error(`config: tools[${toolName}].handler.http.url must be a string`);
+  }
+
+  const out: HttpHandler = { http: { method: method as HttpMethod } };
+  if (connection !== undefined) out.http.connection = connection as string;
+  if (url !== undefined) out.http.url = url as string;
+
+  for (const key of ["path", "body"]) {
+    if (h[key] !== undefined) (out.http as Record<string, unknown>)[key] = h[key];
+  }
+
+  if (h["query"] !== undefined) {
+    if (!h["query"] || typeof h["query"] !== "object" || Array.isArray(h["query"])) {
+      throw new Error(`config: tools[${toolName}].handler.http.query must be a mapping`);
+    }
+    const q: Record<string, string> = {};
+    for (const [k, v] of Object.entries(h["query"])) {
+      if (typeof v !== "string") {
+        throw new Error(
+          `config: tools[${toolName}].handler.http.query.${k} must be a string`,
+        );
+      }
+      q[k] = v;
+    }
+    out.http.query = q;
+  }
+
+  if (h["headers"] !== undefined) {
+    if (!h["headers"] || typeof h["headers"] !== "object" || Array.isArray(h["headers"])) {
+      throw new Error(`config: tools[${toolName}].handler.http.headers must be a mapping`);
+    }
+    const hdrs: Record<string, string> = {};
+    for (const [k, v] of Object.entries(h["headers"])) {
+      if (typeof v !== "string") {
+        throw new Error(`config: tools[${toolName}].handler.http.headers.${k} must be a string`);
+      }
+      hdrs[k] = v;
+    }
+    out.http.headers = hdrs;
+  }
+
+  if (h["response"] !== undefined) {
+    if (h["response"] !== "body" && h["response"] !== "envelope") {
+      throw new Error(
+        `config: tools[${toolName}].handler.http.response must be "body" or "envelope"`,
+      );
+    }
+    out.http.response = h["response"] as "body" | "envelope";
+  }
+
+  if (h["timeout_ms"] !== undefined) {
+    if (typeof h["timeout_ms"] !== "number" || !Number.isFinite(h["timeout_ms"]) || h["timeout_ms"] <= 0) {
+      throw new Error(`config: tools[${toolName}].handler.http.timeout_ms must be a positive number`);
+    }
+    out.http.timeout_ms = h["timeout_ms"];
+  }
+
+  const known = new Set([
+    "method", "connection", "url", "path", "query",
+    "headers", "body", "response", "timeout_ms",
+  ]);
+  for (const key of Object.keys(h)) {
+    if (!known.has(key)) {
+      throw new Error(
+        `config: tools[${toolName}].handler.http: unknown key "${key}"`,
+      );
+    }
+  }
+
+  return out;
 }
 
 function validateConnections(v: unknown): ConnectionsConfig | undefined {
