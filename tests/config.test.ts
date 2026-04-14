@@ -204,11 +204,10 @@ server:
   name: s
   version: "0.1.0"
   security:
-    network:
-      allow: []
+    bogus: true
 tools: []
 `;
-  assert.throws(() => parseConfig(yaml), /security: unknown key "network"/);
+  assert.throws(() => parseConfig(yaml), /security: unknown key "bogus"/);
 });
 
 test("parseConfig accepts a tool with a compute handler", () => {

@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SecurityConfig } from "./util/access.ts";
 import type { JsonLogicRule } from "./util/jsonlogic.ts";
+import { expandShimInTree } from "./util/interpolate.ts";
 
 export type { SecurityConfig };
 
@@ -61,9 +62,24 @@ export interface ToolDefinition {
   transform?: JsonLogicRule;
 }
 
+/**
+ * A single upstream connection. URL and timeout are static (resolved at
+ * boot). Headers may be static strings OR JSONLogic rules (the result
+ * of ${VAR} shim expansion or an author-authored rule). Compilation to
+ * cached rules happens in src/runtime/connections.ts at boot.
+ */
+export interface ConnectionDefinition {
+  url: string;
+  headers?: Record<string, string | JsonLogicRule>;
+  timeout_ms?: number;
+}
+
+export type ConnectionsConfig = Record<string, ConnectionDefinition>;
+
 export interface JigConfig {
   server: ServerMetadata;
   tools: ToolDefinition[];
+  connections?: ConnectionsConfig;
 }
 
 export function parseConfig(yamlText: string): JigConfig {
@@ -75,8 +91,11 @@ export function parseConfig(yamlText: string): JigConfig {
 
   const server = validateServer(obj["server"]);
   const tools = validateTools(obj["tools"]);
+  const connections = validateConnections(obj["connections"]);
 
-  return { server, tools };
+  const result: JigConfig = { server, tools };
+  if (connections !== undefined) result.connections = connections;
+  return result;
 }
 
 function validateServer(v: unknown): ServerMetadata {
@@ -111,7 +130,7 @@ function validateSecurity(v: unknown): SecurityConfig | undefined {
   const sec = v as Record<string, unknown>;
 
   // Reject unknown top-level keys
-  const knownKeys = new Set(["filesystem", "env"]);
+  const knownKeys = new Set(["filesystem", "env", "network"]);
   for (const key of Object.keys(sec)) {
     if (!knownKeys.has(key)) {
       throw new Error(`config: security: unknown key "${key}"`);
@@ -157,6 +176,26 @@ function validateSecurity(v: unknown): SecurityConfig | undefined {
       result.env = { allow: env["allow"] as string[] };
     } else {
       result.env = {};
+    }
+  }
+
+  if (sec["network"] !== undefined) {
+    if (!sec["network"] || typeof sec["network"] !== "object") {
+      throw new Error("config: security.network must be a mapping");
+    }
+    const net = sec["network"] as Record<string, unknown>;
+    if (net["allow"] !== undefined) {
+      if (!Array.isArray(net["allow"])) {
+        throw new Error("config: security.network.allow must be an array of strings");
+      }
+      for (const entry of net["allow"]) {
+        if (typeof entry !== "string" || entry.length === 0) {
+          throw new Error("config: security.network.allow entries must be non-empty strings");
+        }
+      }
+      result.network = { allow: net["allow"] as string[] };
+    } else {
+      result.network = {};
     }
   }
 
@@ -347,4 +386,51 @@ export function resolveConfigPath(args: ResolveArgs): string {
 export function loadConfigFromFile(path: string): JigConfig {
   const text = readFileSync(path, "utf8");
   return parseConfig(text);
+}
+
+function validateConnections(v: unknown): ConnectionsConfig | undefined {
+  if (v === undefined) return undefined;
+  if (!v || typeof v !== "object" || Array.isArray(v)) {
+    throw new Error("config: connections must be a mapping");
+  }
+  const raw = v as Record<string, unknown>;
+  const out: ConnectionsConfig = {};
+  for (const [name, entry] of Object.entries(raw)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`config: connections.${name} must be a mapping`);
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e["url"] !== "string" || e["url"].length === 0) {
+      throw new Error(`config: connections.${name}.url must be a non-empty string`);
+    }
+    const url = e["url"];
+    const def: ConnectionDefinition = { url };
+
+    if (e["headers"] !== undefined) {
+      if (!e["headers"] || typeof e["headers"] !== "object" || Array.isArray(e["headers"])) {
+        throw new Error(`config: connections.${name}.headers must be a mapping`);
+      }
+      // Apply ${VAR} shim to every string value in headers.
+      const expanded = expandShimInTree(e["headers"]) as Record<string, unknown>;
+      def.headers = expanded as Record<string, string | JsonLogicRule>;
+    }
+
+    if (e["timeout_ms"] !== undefined) {
+      if (typeof e["timeout_ms"] !== "number" || !Number.isFinite(e["timeout_ms"]) || e["timeout_ms"] <= 0) {
+        throw new Error(`config: connections.${name}.timeout_ms must be a positive number`);
+      }
+      def.timeout_ms = e["timeout_ms"];
+    }
+
+    // Reject unknown keys so typos fail loud.
+    const known = new Set(["url", "headers", "timeout_ms"]);
+    for (const key of Object.keys(e)) {
+      if (!known.has(key)) {
+        throw new Error(`config: connections.${name}: unknown key "${key}"`);
+      }
+    }
+
+    out[name] = def;
+  }
+  return out;
 }
