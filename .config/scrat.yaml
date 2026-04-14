@@ -1,0 +1,5 @@
+project:
+  type: node
+
+commands:
+  test: just test
