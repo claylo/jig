@@ -2,8 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { invokeExec } from "../src/runtime/handlers/exec.ts";
 import { invokeDispatch } from "../src/runtime/handlers/dispatch.ts";
-import type { DispatchHandler, Handler } from "../src/runtime/config.ts";
+import { invokeCompute } from "../src/runtime/handlers/compute.ts";
+import type { DispatchHandler, Handler, ComputeHandler } from "../src/runtime/config.ts";
 import type { ToolCallResult } from "../src/runtime/handlers/types.ts";
+import type { JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
+// Side-effect: ensures helpers are registered before the compute tests run.
+import "../src/runtime/util/helpers.ts";
 
 test("invokeExec returns stdout from /bin/echo as text content", async () => {
   const result = await invokeExec({ exec: "/bin/echo hello" }, {});
@@ -121,4 +125,44 @@ test("invokeDispatch passes through args to the sub-handler", async () => {
   assert.equal(capturedArgs.action, "greet");
   assert.equal(capturedArgs.name, "Alice");
   assert.equal(capturedArgs.extra, "preserved");
+});
+
+test("invokeCompute evaluates a simple var reference", async () => {
+  const handler: ComputeHandler = { compute: { var: "name" } };
+  const result = await invokeCompute(handler, { name: "Ada" });
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content[0]!.text, "Ada");
+});
+
+test("invokeCompute evaluates a helper call", async () => {
+  const handler: ComputeHandler = { compute: { "os.platform": [] } };
+  const result = await invokeCompute(handler, {});
+  assert.equal(result.isError, undefined);
+  assert.equal(typeof result.content[0]!.text, "string");
+  assert.ok(result.content[0]!.text.length > 0);
+});
+
+test("invokeCompute JSON-stringifies object results", async () => {
+  // preserve keeps the object literal from being interpreted as operators.
+  const handler: ComputeHandler = {
+    compute: { preserve: { a: 1, b: "two" } },
+  };
+  const result = await invokeCompute(handler, {});
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content[0]!.text, '{"a":1,"b":"two"}');
+});
+
+test("invokeCompute stringifies null/undefined as the literal strings", async () => {
+  const handler: ComputeHandler = { compute: { var: "missing" } };
+  const result = await invokeCompute(handler, {});
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content[0]!.text, "null");
+});
+
+test("invokeCompute returns isError when the engine throws", async () => {
+  // An unknown operator throws at the engine boundary.
+  const handler: ComputeHandler = { compute: { unknownOperator: [1, 2] } as unknown as JsonLogicRule };
+  const result = await invokeCompute(handler, {});
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /compute:/i);
 });
