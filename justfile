@@ -29,3 +29,17 @@ smoke:
       exit 1
     fi
     echo "$response" | jq .
+
+# Smoke-dispatch: exercise the dispatcher example. Sends initialize +
+# tools/call for action=help, verifies the expected text shows up.
+smoke-dispatch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requests='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
+    {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"greet","arguments":{"action":"help"}}}'
+    output=$(echo "$requests" | node --experimental-transform-types src/runtime/index.ts --config examples/dispatcher.yaml)
+    if [ -z "$output" ]; then
+      echo "smoke-dispatch: no response from runtime" >&2
+      exit 1
+    fi
+    echo "$output" | tail -1 | jq .
