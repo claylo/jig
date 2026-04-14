@@ -42,3 +42,28 @@ test("invokeInline returns the configured text as an MCP content block", () => {
     content: [{ type: "text", text: "pong" }],
   });
 });
+
+test("toolToInputSchema emits enum for the dispatch discriminator", () => {
+  const tool: ToolDefinition = {
+    name: "linear",
+    description: "x",
+    input: {
+      action: { type: "string", required: true },
+      id: { type: "string" },
+    },
+    handler: {
+      dispatch: {
+        on: "action",
+        cases: {
+          get: { requires: ["id"], handler: { inline: { text: "g" } } },
+          search: { handler: { inline: { text: "s" } } },
+        },
+      },
+    },
+  };
+  const schema = toolToInputSchema(tool);
+  assert.deepEqual(schema.properties["action"], {
+    type: "string",
+    enum: ["get", "search"],
+  });
+});

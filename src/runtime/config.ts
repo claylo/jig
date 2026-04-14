@@ -24,11 +24,23 @@ export interface ExecHandler {
   exec: string;
 }
 
-export type Handler = InlineHandler;
-// Phase 4 of Plan 2 expands this to InlineHandler | ExecHandler | DispatchHandler.
-// ExecHandler is declared now so exec.ts has a shared type; it does not yet
-// appear in the Handler union because validateHandler does not yet accept
-// exec YAML. HttpHandler, GraphqlHandler, ComputeHandler land in later plans.
+export interface DispatchCase {
+  requires?: string[];
+  handler: Handler;
+}
+
+export interface DispatchHandler {
+  dispatch: {
+    on: string;
+    cases: Record<string, DispatchCase>;
+  };
+}
+
+export type Handler = InlineHandler | DispatchHandler;
+// Phase 4 of Plan 2 adds ExecHandler to this union once validateHandler
+// parses exec YAML. ExecHandler is already declared so exec.ts has a
+// shared type. HttpHandler, GraphqlHandler, ComputeHandler land in
+// later plans.
 
 export interface ToolDefinition {
   name: string;

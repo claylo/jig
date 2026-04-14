@@ -23,8 +23,16 @@ async function main(): Promise<void> {
   // types land (exec, http, graphql, dispatch, compute in Plan 2+), this
   // loop routes into a dispatcher rather than growing into a switch.
   for (const tool of config.tools) {
-    const handler: ToolHandler = async (_args: unknown) =>
-      invokeInline(tool.handler);
+    // Phase 3 interim: the Handler union now admits DispatchHandler, but
+    // validateHandler still only produces InlineHandler. Narrow before
+    // dispatching; Phase 4 replaces this with a central invoke().
+    const toolHandler = tool.handler;
+    const handler: ToolHandler = async (_args: unknown) => {
+      if ("inline" in toolHandler) return invokeInline(toolHandler);
+      throw new Error(
+        `runtime: tool "${tool.name}" has a handler type not yet reachable from config parsing`,
+      );
+    };
     server.registerTool(
       tool.name,
       {
