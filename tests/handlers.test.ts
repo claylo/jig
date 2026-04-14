@@ -13,6 +13,7 @@ import type { JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
 import "../src/runtime/util/helpers.ts";
 import { configureAccess, resetAccessForTests } from "../src/runtime/util/access.ts";
 import { invokeHttp } from "../src/runtime/handlers/http.ts";
+import { invokeGraphql } from "../src/runtime/handlers/graphql.ts";
 import { compileConnections } from "../src/runtime/connections.ts";
 
 async function startHandlerFixture(
@@ -573,6 +574,144 @@ test("invokeHttp uses handler url directly when no connection", async () => {
     assert.equal(result.isError, undefined);
     assert.equal(seenUrl, "/direct");
     assert.equal(result.content[0]!.text, "direct");
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeGraphql posts query + variables as JSON to the connection URL", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenCT = "";
+  let seenBody = "";
+  const fix = await startHandlerFixture((req, res) => {
+    seenCT = (req.headers["content-type"] as string | undefined) ?? "";
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      seenBody = Buffer.concat(chunks).toString("utf8");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: { team: { name: "Engineering" } } }));
+    });
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    const result = await invokeGraphql(
+      {
+        graphql: {
+          connection: "api",
+          query: "query GetTeam($id: ID!) { team(id: $id) { name } }",
+          variables: { id: "{{team_id}}" },
+        },
+      },
+      { team_id: "t-1" },
+      compiled,
+    );
+    assert.equal(result.isError, undefined);
+    assert.match(seenCT, /application\/json/);
+    const parsed = JSON.parse(seenBody) as { query: string; variables: { id: string } };
+    assert.match(parsed.query, /GetTeam/);
+    assert.equal(parsed.variables.id, "t-1");
+    // Default response: data mode extracts data.
+    const data = JSON.parse(result.content[0]!.text) as { team: { name: string } };
+    assert.equal(data.team.name, "Engineering");
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeGraphql flips isError when the response includes errors:", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  const fix = await startHandlerFixture((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      errors: [
+        { message: "Field \"bogus\" is not defined" },
+        { message: "secondary" },
+      ],
+    }));
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    const result = await invokeGraphql(
+      { graphql: { connection: "api", query: "{ bogus }" } },
+      {},
+      compiled,
+    );
+    assert.equal(result.isError, true);
+    assert.match(result.content[0]!.text, /bogus.*not defined/);
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeGraphql envelope mode returns data + errors + extensions", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  const fix = await startHandlerFixture((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      data: { partial: true },
+      errors: [{ message: "partial failure" }],
+      extensions: { trace: "abc" },
+    }));
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    const result = await invokeGraphql(
+      { graphql: { connection: "api", query: "{ partial }", response: "envelope" } },
+      {},
+      compiled,
+    );
+    assert.equal(result.isError, undefined);
+    const env = JSON.parse(result.content[0]!.text) as {
+      data: unknown;
+      errors: { message: string }[];
+      extensions: unknown;
+    };
+    assert.deepEqual(env.data, { partial: true });
+    assert.equal(env.errors[0]!.message, "partial failure");
+    assert.deepEqual(env.extensions, { trace: "abc" });
+  } finally {
+    await fix.close();
+  }
+});
+
+test("invokeGraphql denies an unknown connection name", async () => {
+  const result = await invokeGraphql(
+    { graphql: { connection: "missing", query: "{ x }" } },
+    {},
+    compileConnections({}),
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /unknown connection "missing"/);
+});
+
+test("invokeGraphql respects connection Content-Type regardless of casing", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  let seenCT = "";
+  const fix = await startHandlerFixture((req, res) => {
+    seenCT = (req.headers["content-type"] as string | undefined) ?? "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ data: { ok: true } }));
+  });
+  try {
+    const compiled = compileConnections({
+      api: {
+        url: fix.url,
+        headers: { "content-Type": "application/graphql" },
+      },
+    });
+    const result = await invokeGraphql(
+      { graphql: { connection: "api", query: "{ ok }" } },
+      {},
+      compiled,
+    );
+    assert.equal(result.isError, undefined);
+    // Author's casing wins; jig must not also append its own application/json.
+    assert.equal(seenCT, "application/graphql");
   } finally {
     await fix.close();
   }

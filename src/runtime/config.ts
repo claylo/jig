@@ -63,13 +63,23 @@ export interface HttpHandler {
   };
 }
 
+export interface GraphqlHandler {
+  graphql: {
+    connection: string;
+    query: string;
+    variables?: unknown; // YAML mapping → JSON with Mustache in string leaves
+    response?: "data" | "envelope";
+    timeout_ms?: number;
+  };
+}
+
 export type Handler =
   | InlineHandler
   | ExecHandler
   | DispatchHandler
   | ComputeHandler
-  | HttpHandler;
-// GraphqlHandler lands in Phase 6.
+  | HttpHandler
+  | GraphqlHandler;
 
 export interface ToolDefinition {
   name: string;
@@ -324,8 +334,12 @@ function validateHandler(v: unknown, toolName: string): Handler {
     return validateHttp(h["http"], toolName);
   }
 
+  if (h["graphql"] && typeof h["graphql"] === "object") {
+    return validateGraphql(h["graphql"], toolName);
+  }
+
   throw new Error(
-    `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http)`,
+    `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http, graphql)`,
   );
 }
 
@@ -545,5 +559,52 @@ function validateConnections(v: unknown): ConnectionsConfig | undefined {
 
     out[name] = def;
   }
+  return out;
+}
+
+function validateGraphql(v: unknown, toolName: string): GraphqlHandler {
+  const g = v as Record<string, unknown>;
+  if (typeof g["connection"] !== "string" || g["connection"].length === 0) {
+    throw new Error(
+      `config: tools[${toolName}].handler.graphql.connection must be a non-empty string`,
+    );
+  }
+  if (typeof g["query"] !== "string" || g["query"].length === 0) {
+    throw new Error(
+      `config: tools[${toolName}].handler.graphql.query must be a non-empty string`,
+    );
+  }
+  const out: GraphqlHandler = {
+    graphql: { connection: g["connection"], query: g["query"] },
+  };
+  if (g["variables"] !== undefined) out.graphql.variables = g["variables"];
+  if (g["response"] !== undefined) {
+    if (g["response"] !== "data" && g["response"] !== "envelope") {
+      throw new Error(
+        `config: tools[${toolName}].handler.graphql.response must be "data" or "envelope"`,
+      );
+    }
+    out.graphql.response = g["response"] as "data" | "envelope";
+  }
+  if (g["timeout_ms"] !== undefined) {
+    if (typeof g["timeout_ms"] !== "number" || !Number.isFinite(g["timeout_ms"]) || g["timeout_ms"] <= 0) {
+      throw new Error(
+        `config: tools[${toolName}].handler.graphql.timeout_ms must be a positive number`,
+      );
+    }
+    out.graphql.timeout_ms = g["timeout_ms"];
+  }
+
+  const known = new Set([
+    "connection", "query", "variables", "response", "timeout_ms",
+  ]);
+  for (const key of Object.keys(g)) {
+    if (!known.has(key)) {
+      throw new Error(
+        `config: tools[${toolName}].handler.graphql: unknown key "${key}"`,
+      );
+    }
+  }
+
   return out;
 }
