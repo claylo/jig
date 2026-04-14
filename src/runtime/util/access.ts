@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { resolve, isAbsolute, sep } from "node:path";
 import { realpathSync } from "node:fs";
+import type { ConnectionsConfig } from "../config.ts";
 
 export interface FilesystemSecurity {
   allow?: string[];
@@ -36,6 +37,7 @@ export const DEFAULT_ENV_ALLOW: readonly string[] = [
 // Module state — null means configureAccess has not been called yet.
 let allowedRoots: string[] | null = null;
 let allowedEnvPatterns: RegExp[] | null = null;
+let allowedHostPatterns: RegExp[] | null = null;
 // Store runtimeRoot for use in path expansion.
 let configuredRuntimeRoot: string | null = null;
 
@@ -59,6 +61,47 @@ function compileEnvPattern(pattern: string): RegExp {
   // Now convert * to .* for regex
   const regexStr = "^" + pattern.replace(/\*/g, ".*") + "$";
   return new RegExp(regexStr);
+}
+
+/**
+ * Compile a host glob pattern (only * wildcard supported). Must match
+ * at least one character per wildcard, so "*.github.com" matches
+ * "api.github.com" but not bare "github.com".
+ */
+function compileHostPattern(pattern: string): RegExp {
+  if (pattern.length === 0) {
+    throw new Error(`config.security.network.allow: empty pattern is not allowed`);
+  }
+  // We use . literally in a host, so escape it in the compiled regex.
+  if (/[+?^${}()|[\]\\]/.test(pattern)) {
+    throw new Error(
+      `config.security.network.allow: pattern "${pattern}" contains unsupported regex metacharacters (only * is supported)`,
+    );
+  }
+  const escaped = pattern.replace(/\./g, "\\.").replace(/\*/g, ".+");
+  return new RegExp("^" + escaped + "$");
+}
+
+/**
+ * Build the inferred host allowlist from a parsed connections: block.
+ * Extracts URL.hostname from each connection's url (which URL already
+ * lowercases), deduping repeat hosts. Throws with a clear error if any
+ * url fails to parse — caller (configureAccess) surfaces that at boot.
+ */
+function inferHostsFromConnections(connections: ConnectionsConfig): string[] {
+  const hosts: string[] = [];
+  for (const [name, def] of Object.entries(connections)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(def.url);
+    } catch {
+      throw new Error(
+        `config: connections.${name}.url is not a valid URL: ${def.url}`,
+      );
+    }
+    if (!hosts.includes(parsed.hostname)) hosts.push(parsed.hostname);
+  }
+  return hosts;
 }
 
 /**
@@ -121,19 +164,25 @@ function expandFsEntry(entry: string, runtimeRoot: string): string {
 }
 
 /**
- * Configure allowed filesystem roots and env var patterns. Must be called
- * once at runtime boot with the server's SecurityConfig and the absolute
- * path of the runtime-entry directory (RUNTIME_ROOT). Before this runs,
- * every isPathAllowed / isEnvAllowed check returns null/false. That
- * deny-by-default protects tests and library consumers that forget to
- * initialize.
+ * Configure the runtime's access policy. Called once at boot from the
+ * server entry point. Sets up three allowlists:
  *
- * Throws a descriptive Error if any allow entry references an unset
- * environment variable, or if a glob pattern is malformed. Fails closed.
+ *   - filesystem roots (compiled via expandFsEntry against runtimeRoot)
+ *   - env var patterns (compiled via compileEnvPattern, case-sensitive)
+ *   - network host patterns (compiled via compileHostPattern, case-
+ *     insensitive per RFC 1035; explicit security.network.allow wins,
+ *     otherwise inferred from connections:, otherwise empty)
+ *
+ * connections is only consulted when security.network.allow is unset;
+ * it seeds the inferred host allowlist.
+ *
+ * Repeated calls replace the prior state — configureAccess is
+ * idempotent per call but not additive.
  */
 export function configureAccess(
   security: SecurityConfig,
   runtimeRoot: string,
+  connections?: ConnectionsConfig,
 ): void {
   configuredRuntimeRoot = runtimeRoot;
 
@@ -144,6 +193,19 @@ export function configureAccess(
   // Env allowlist
   const envEntries = security.env?.allow ?? [...DEFAULT_ENV_ALLOW];
   allowedEnvPatterns = envEntries.map((pattern) => compileEnvPattern(pattern));
+
+  // Network allowlist: explicit overrides inference; connections populate the
+  // inferred list only when no explicit allow is set.
+  if (security.network?.allow !== undefined) {
+    allowedHostPatterns = security.network.allow.map((pattern) =>
+      compileHostPattern(pattern.toLowerCase()),
+    );
+  } else if (connections !== undefined) {
+    const inferred = inferHostsFromConnections(connections);
+    allowedHostPatterns = inferred.map((host) => compileHostPattern(host));
+  } else {
+    allowedHostPatterns = [];
+  }
 }
 
 /**
@@ -188,9 +250,19 @@ export function isEnvAllowed(name: string): boolean {
   return allowedEnvPatterns.some((pattern) => pattern.test(name));
 }
 
+/**
+ * Check a hostname against the configured allowlist. Only true when
+ * at least one pattern matches AND configureAccess has been called.
+ */
+export function isHostAllowed(hostname: string): boolean {
+  if (allowedHostPatterns === null) return false;
+  return allowedHostPatterns.some((pattern) => pattern.test(hostname));
+}
+
 /** Reset module state — test-only. */
 export function resetAccessForTests(): void {
   allowedRoots = null;
   allowedEnvPatterns = null;
+  allowedHostPatterns = null;
   configuredRuntimeRoot = null;
 }
