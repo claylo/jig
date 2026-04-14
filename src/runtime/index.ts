@@ -1,5 +1,7 @@
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
-import { createServer } from "./server.ts";
+import { createServer, type ToolHandler } from "./server.ts";
+import { invokeInline } from "./handlers/inline.ts";
+import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
 
 async function main(): Promise<void> {
@@ -11,11 +13,27 @@ async function main(): Promise<void> {
 
   const server = createServer(config);
 
-  // Tool registration happens in Phase 4. For Plan 1's Phase 3, no tools
-  // are registered yet — the server still responds to `initialize`.
-  // `tools/list` and `tools/call` are not wired up until the first tool
-  // is registered (see the note in src/runtime/server.ts), which is fine
-  // because Phase 3's integration test only exercises `initialize`.
+  // Plan 1 registers each YAML tool directly on McpServer — no intermediate
+  // registry. The SDK's McpServer already owns the name → tool map and
+  // wires tools/list + tools/call on the first registerTool call
+  // (index.mjs:1335 → setToolRequestHandlers). Introducing our own
+  // ToolRegistry class here would duplicate that with no benefit.
+  //
+  // Plan 1 supports only the `inline` handler. When additional handler
+  // types land (exec, http, graphql, dispatch, compute in Plan 2+), this
+  // loop routes into a dispatcher rather than growing into a switch.
+  for (const tool of config.tools) {
+    const handler: ToolHandler = async (_args: unknown) =>
+      invokeInline(tool.handler);
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: toolToInputSchema(tool),
+      },
+      handler,
+    );
+  }
 
   await server.connect(createStdioTransport());
 }
