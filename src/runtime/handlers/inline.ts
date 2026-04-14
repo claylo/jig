@@ -1,20 +1,7 @@
 import type { InlineHandler } from "../config.ts";
+import type { ToolCallResult } from "./types.ts";
 
-/**
- * Minimum MCP tool-call result shape jig produces in Plan 1. Only text
- * content is emitted; image/resource/embedded-resource content and
- * structured output arrive when later plans start needing them.
- *
- * The index signature mirrors the SDK's `CallToolResult` shape so this
- * lean type is structurally assignable to it — handlers document the
- * minimum they produce without the adapter needing to re-declare the
- * protocol-extras (_meta, structuredContent) they don't touch.
- */
-export interface ToolCallResult {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-  [key: string]: unknown;
-}
+export type { ToolCallResult };
 
 /**
  * Plan 1's only handler type. Returns the configured text verbatim.
