@@ -15,3 +15,17 @@ check:
 # Run tests
 test:
     npm test
+
+# Smoke test: launch the runtime against examples/minimal.yaml, send one
+# initialize request, print the response. Exit non-zero if the
+# initialize response doesn't arrive on stdout.
+smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    req='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+    response=$(echo "$req" | node --experimental-transform-types src/runtime/index.ts --config examples/minimal.yaml | head -1)
+    if [ -z "$response" ]; then
+      echo "smoke: no response from runtime" >&2
+      exit 1
+    fi
+    echo "$response" | jq .

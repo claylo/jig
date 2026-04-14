@@ -1,0 +1,20 @@
+# Minimal jig.yaml — a single tool with an inline handler.
+# Plan 2 expands this into a dispatcher-style example.
+
+server:
+  name: jig-minimal
+  version: "1.0.0"
+  description: |
+    The smallest useful jig example — one tool, one inline response.
+    Meant as the Plan 1 smoke-test target.
+
+tools:
+  - name: hello
+    description: Say hello. Useful only as a reachability probe.
+    input:
+      name:
+        type: string
+        description: Who to greet. Ignored in Plan 1; preserved for Plan 2.
+    handler:
+      inline:
+        text: "Hello from jig!"
