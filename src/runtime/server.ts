@@ -52,8 +52,10 @@ import {
   McpServer,
   fromJsonSchema,
   type CallToolResult,
+  type GetPromptResult,
   type JsonSchemaType,
   type ReadResourceResult,
+  type RegisteredPrompt,
   type RegisteredResource,
   type RegisteredTool,
   type ResourceMetadata,
@@ -87,6 +89,19 @@ export interface RegisterToolSpec {
   title?: string;
   annotations?: ToolAnnotations;
 }
+
+/**
+ * Spec for registering one prompt. argsSchema is a JSON Schema object
+ * whose properties describe the prompt's named arguments. Pass undefined
+ * for a no-argument prompt.
+ */
+export interface RegisterPromptSpec {
+  description?: string;
+  argsSchema?: JsonSchemaObject;
+}
+
+/** Re-export so prompts.ts can type the return value without touching the SDK. */
+export type RegisteredPromptHandle = RegisteredPrompt;
 
 /**
  * Minimal spec a caller passes into registerResource. Mirrors the shape
@@ -155,6 +170,17 @@ export interface JigServerHandle {
    * tracker.isSubscribed(uri) === true.
    */
   sendResourceUpdated(uri: string): Promise<void>;
+  /**
+   * Register one prompt. The adapter bridges argsSchema via
+   * fromJsonSchema so McpServer.registerPrompt accepts it.
+   * Auto-wires prompts/list + prompts/get and advertises
+   * capabilities.prompts.listChanged.
+   */
+  registerPrompt(
+    name: string,
+    spec: RegisterPromptSpec,
+    handler: (args: Record<string, string>) => GetPromptResult,
+  ): RegisteredPromptHandle;
   /** Attach to a transport and begin serving. */
   connect(transport: Transport): Promise<void>;
 }
@@ -271,6 +297,31 @@ export function createServer(
     },
     async sendResourceUpdated(uri) {
       await server.server.sendResourceUpdated({ uri });
+    },
+    registerPrompt(name, spec, handler) {
+      const argsSchema: StandardSchemaWithJSON | undefined =
+        spec.argsSchema !== undefined
+          ? fromJsonSchema(spec.argsSchema)
+          : undefined;
+      if (argsSchema !== undefined) {
+        const cb: unknown = (args: Record<string, string>) => handler(args);
+        return server.registerPrompt(
+          name,
+          {
+            ...(spec.description !== undefined && { description: spec.description }),
+            argsSchema,
+          },
+          cb as Parameters<typeof server.registerPrompt>[2],
+        );
+      }
+      const cb: unknown = () => handler({});
+      return server.registerPrompt(
+        name,
+        {
+          ...(spec.description !== undefined && { description: spec.description }),
+        },
+        cb as Parameters<typeof server.registerPrompt>[2],
+      );
     },
     async connect(transport: Transport) {
       await server.connect(transport);

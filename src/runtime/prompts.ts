@@ -1,4 +1,11 @@
 import type { PromptArgumentSpec, PromptSpec, PromptsConfig } from "./config.ts";
+import type {
+  JigServerHandle,
+  RegisteredPromptHandle,
+  RegisterPromptSpec,
+} from "./server.ts";
+import type { InvokeContext } from "./handlers/index.ts";
+import { render } from "./util/template.ts";
 
 const PROMPT_KNOWN = new Set(["name", "description", "arguments", "template"]);
 const ARG_KNOWN = new Set(["name", "description", "required"]);
@@ -117,3 +124,72 @@ function validatePromptArgument(
   if (a["required"] !== undefined) out.required = a["required"] === true;
   return out;
 }
+
+/**
+ * Build a JSON Schema object for the prompt's arguments array.
+ * The schema shape is: { type: "object", properties: { argName: {
+ *   type: "string", description? } }, required: [requiredArgNames] }.
+ * This is the shape fromJsonSchema expects and that the SDK's
+ * promptArgumentsFromStandardSchema round-trips cleanly.
+ */
+function buildArgsSchema(args: PromptArgumentSpec[]): RegisterPromptSpec["argsSchema"] {
+  const properties: Record<string, { type: "string"; description?: string }> = {};
+  const required: string[] = [];
+  for (const arg of args) {
+    properties[arg.name] = { type: "string" };
+    if (arg.description !== undefined) {
+      properties[arg.name]!.description = arg.description;
+    }
+    if (arg.required === true) {
+      required.push(arg.name);
+    }
+  }
+  return {
+    type: "object",
+    properties,
+    ...(required.length > 0 && { required }),
+  };
+}
+
+/**
+ * Register every prompt in the config with the MCP server. Returns an
+ * array of SDK handles (ignored by v1; future hot-reload plan consumes
+ * them). Each prompt's get callback renders the template via render()
+ * with the provided args merged with probe, returning a single
+ * user-role text message.
+ */
+export function registerPrompts(
+  server: JigServerHandle,
+  prompts: PromptsConfig,
+  ctx: InvokeContext,
+): RegisteredPromptHandle[] {
+  const handles: RegisteredPromptHandle[] = [];
+  for (const spec of prompts) {
+    const argsSchema =
+      spec.arguments !== undefined && spec.arguments.length > 0
+        ? buildArgsSchema(spec.arguments)
+        : undefined;
+    const handle = server.registerPrompt(
+      spec.name,
+      {
+        ...(spec.description !== undefined && { description: spec.description }),
+        ...(argsSchema !== undefined && { argsSchema }),
+      },
+      (args: Record<string, string>) => {
+        const rendered = render(spec.template, { ...args, probe: ctx.probe });
+        return {
+          messages: [
+            {
+              role: "user" as const,
+              content: { type: "text" as const, text: rendered },
+            },
+          ],
+        };
+      },
+    );
+    handles.push(handle);
+  }
+  return handles;
+}
+
+export type { RegisteredPromptHandle };

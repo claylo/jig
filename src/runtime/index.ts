@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
 import { createServer, type ToolHandler } from "./server.ts";
 import { registerResources, startWatchers } from "./resources.ts";
+import { registerPrompts } from "./prompts.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
@@ -87,6 +88,10 @@ async function main(): Promise<void> {
     registerResources(server, config.resources, ctx);
     const tracker = server.trackSubscriptions();
     startWatchers(config.resources, server, tracker, ctx);
+  }
+
+  if (config.prompts) {
+    registerPrompts(server, config.prompts, ctx);
   }
 
   await server.connect(createStdioTransport());
