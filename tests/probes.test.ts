@@ -180,3 +180,250 @@ tools: []
 `;
   assert.throws(() => parseConfig(yamlText), /config: probes\.broken must be a mapping/);
 });
+
+import { resolveProbes } from "../src/runtime/probes.ts";
+import { compileConnections } from "../src/runtime/connections.ts";
+import { configureAccess, resetAccessForTests } from "../src/runtime/util/access.ts";
+import { createServer as createHttpServerProbes } from "node:http";
+import type { AddressInfo as AddressInfoProbes } from "node:net";
+
+async function startProbeFixture(
+  handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createHttpServerProbes(handler);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfoProbes).port;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
+test("resolveProbes resolves a single graphql probe to its data field", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  const fix = await startProbeFixture((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ data: { teams: [{ name: "Eng" }] } }));
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    const result = await resolveProbes(
+      {
+        teams: {
+          handler: { graphql: { connection: "api", query: "{ teams { name } }" } },
+        },
+      },
+      compiled,
+    );
+    // Default graphql data mode returns the JSON-stringified data field.
+    const parsed = JSON.parse(result["teams"] as string) as { teams: { name: string }[] };
+    assert.equal(parsed.teams[0]!.name, "Eng");
+  } finally {
+    await fix.close();
+  }
+});
+
+test("resolveProbes resolves an exec probe to its stdout", async () => {
+  resetAccessForTests();
+  configureAccess({}, process.cwd());
+  const result = await resolveProbes(
+    { greeting: { handler: { exec: "echo hello" } } },
+    {},
+  );
+  assert.match(String(result["greeting"]), /hello/);
+});
+
+test("resolveProbes applies map: to shape the response", async () => {
+  resetAccessForTests();
+  configureAccess({ network: { allow: ["127.0.0.1"] } }, process.cwd());
+  const fix = await startProbeFixture((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ data: { teams: [{ name: "Eng" }, { name: "Ops" }] } }));
+  });
+  try {
+    const compiled = compileConnections({ api: { url: fix.url } });
+    const result = await resolveProbes(
+      {
+        team_names: {
+          handler: { graphql: { connection: "api", query: "{ teams { name } }" } },
+          // Map walks through the JSON-stringified graphql data-mode result;
+          // the resolver pre-parses, so map sees the parsed object.
+          map: { map: [{ var: "result.teams" }, { var: "name" }] },
+        },
+      },
+      compiled,
+    );
+    assert.deepEqual(result["team_names"], ["Eng", "Ops"]);
+  } finally {
+    await fix.close();
+  }
+});
+
+test("resolveProbes returns raw text when map: is absent", async () => {
+  resetAccessForTests();
+  configureAccess({}, process.cwd());
+  // No map: — the resolver early-returns the handler's raw text without
+  // attempting JSON.parse.
+  const result = await resolveProbes(
+    { plain: { handler: { exec: "echo plain text here" } } },
+    {},
+  );
+  assert.match(String(result["plain"]), /plain text here/);
+});
+
+test("resolveProbes passes raw string to map: when response is not JSON", async () => {
+  resetAccessForTests();
+  configureAccess({}, process.cwd());
+  // map: is present AND handler returns non-JSON text — exercises the
+  // JSON.parse fallback in resolveOne. `{ var: "result" }` passes the raw
+  // string through unchanged.
+  const result = await resolveProbes(
+    {
+      plain_mapped: {
+        handler: { exec: "echo not json here" },
+        map: { var: "result" },
+      },
+    },
+    {},
+  );
+  assert.match(String(result["plain_mapped"]), /not json here/);
+});
+
+test("resolveProbes returns empty object when probes is undefined or empty", async () => {
+  assert.deepEqual(await resolveProbes(undefined, {}), {});
+  assert.deepEqual(await resolveProbes({}, {}), {});
+});
+
+import { spawn } from "node:child_process";
+
+interface SubprocResult {
+  code: number | null;
+  stderr: string;
+  stdout: string;
+}
+
+function runResolveSubprocess(driverScript: string, timeoutMs = 10_000): Promise<SubprocResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "--input-type=module", "-"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => (stdout += c.toString()));
+    child.stderr.on("data", (c) => (stderr += c.toString()));
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("subprocess timeout"));
+    }, timeoutMs);
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      resolve({ code, stderr, stdout });
+    });
+    child.stdin.write(driverScript);
+    child.stdin.end();
+  });
+}
+
+test(
+  "resolveProbes exits 1 on a per-probe timeout",
+  { timeout: 15_000 },
+  async () => {
+    const driver = `
+import { resolveProbes } from "${process.cwd()}/src/runtime/probes.ts";
+import { configureAccess, resetAccessForTests } from "${process.cwd()}/src/runtime/util/access.ts";
+resetAccessForTests();
+configureAccess({}, process.cwd());
+await resolveProbes(
+  { slow: { handler: { exec: "sleep 5" }, timeout_ms: 50 } },
+  {},
+);
+console.log("UNREACHABLE");
+`;
+    const r = await runResolveSubprocess(driver);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /probe resolution failed for 1 probe/);
+    assert.match(r.stderr, /probe "slow":/);
+    assert.match(r.stderr, /timed out after 50ms/);
+    assert.doesNotMatch(r.stdout, /UNREACHABLE/);
+  },
+);
+
+test(
+  "resolveProbes exits 1 on a handler isError result",
+  { timeout: 15_000 },
+  async () => {
+    const driver = `
+import { resolveProbes } from "${process.cwd()}/src/runtime/probes.ts";
+import { configureAccess, resetAccessForTests } from "${process.cwd()}/src/runtime/util/access.ts";
+resetAccessForTests();
+configureAccess({}, process.cwd());
+await resolveProbes(
+  { broken: { handler: { exec: "this-command-does-not-exist-xyz" } } },
+  {},
+);
+console.log("UNREACHABLE");
+`;
+    const r = await runResolveSubprocess(driver);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /probe resolution failed for 1 probe/);
+    assert.match(r.stderr, /probe "broken":/);
+    assert.doesNotMatch(r.stdout, /UNREACHABLE/);
+  },
+);
+
+test(
+  "resolveProbes lists every failure when multiple probes fail",
+  { timeout: 15_000 },
+  async () => {
+    const driver = `
+import { resolveProbes } from "${process.cwd()}/src/runtime/probes.ts";
+import { configureAccess, resetAccessForTests } from "${process.cwd()}/src/runtime/util/access.ts";
+resetAccessForTests();
+configureAccess({}, process.cwd());
+await resolveProbes(
+  {
+    a: { handler: { exec: "this-command-does-not-exist-aaa" } },
+    b: { handler: { exec: "this-command-does-not-exist-bbb" } },
+  },
+  {},
+);
+console.log("UNREACHABLE");
+`;
+    const r = await runResolveSubprocess(driver);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /probe resolution failed for 2 probes/);
+    assert.match(r.stderr, /probe "a":/);
+    assert.match(r.stderr, /probe "b":/);
+  },
+);
+
+test(
+  "resolveProbes exits 1 when map: throws",
+  { timeout: 15_000 },
+  async () => {
+    // Use an operator that throws on bad input — divide by string.
+    const driver = `
+import { resolveProbes } from "${process.cwd()}/src/runtime/probes.ts";
+import { configureAccess, resetAccessForTests } from "${process.cwd()}/src/runtime/util/access.ts";
+resetAccessForTests();
+configureAccess({}, process.cwd());
+await resolveProbes(
+  {
+    bad_map: {
+      handler: { exec: "echo hi" },
+      map: { "/": [{ var: "result" }, 0] },
+    },
+  },
+  {},
+);
+console.log("UNREACHABLE");
+`;
+    const r = await runResolveSubprocess(driver);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /probe "bad_map":/);
+    assert.match(r.stderr, /map: rule failed/);
+  },
+);
