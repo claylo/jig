@@ -120,10 +120,8 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * calls process.exit(1). The MCP server does not start in a degraded
  * state.
  *
- * Per-probe context at boot is empty: `args = {}`. Phase 3 will extend
- * InvokeContext with `probe: Record<string, unknown>` — at that point
- * resolveProbes will need to pass `probe: {}` here (v1 probes cannot
- * reference other probes).
+ * Per-probe context at boot is empty: `args = {}`, `probe = {}`.
+ * v1 probes cannot reference other probes; probe is always seeded empty.
  */
 export async function resolveProbes(
   probes: ProbesConfig | undefined,
@@ -135,6 +133,7 @@ export async function resolveProbes(
 
   const ctx: InvokeContext = {
     connections: compiledConnections,
+    probe: {},
   };
 
   const entries = Object.entries(probes);

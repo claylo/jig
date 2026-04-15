@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExecHandler } from "../config.ts";
-import type { ToolCallResult } from "./types.ts";
+import type { ToolCallResult, InvokeContext } from "./types.ts";
 import { render } from "../util/template.ts";
 
 const execFileAsync = promisify(execFile);
@@ -22,8 +22,9 @@ const execFileAsync = promisify(execFile);
 export async function invokeExec(
   handler: ExecHandler,
   args: Record<string, unknown>,
+  ctx: InvokeContext,
 ): Promise<ToolCallResult> {
-  const rendered = render(handler.exec, args);
+  const rendered = render(handler.exec, { ...args, probe: ctx.probe });
   const argv = rendered.trim().split(/\s+/).filter((part) => part.length > 0);
 
   if (argv.length === 0) {

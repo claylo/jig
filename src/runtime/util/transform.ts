@@ -22,6 +22,7 @@ import { evaluate, type JsonLogicRule } from "./jsonlogic.ts";
 export async function applyTransform(
   result: ToolCallResult,
   args: Record<string, unknown>,
+  probe: Record<string, unknown>,
   rule: JsonLogicRule,
 ): Promise<ToolCallResult> {
   if (result.isError) return result;
@@ -33,6 +34,7 @@ export async function applyTransform(
     const reshaped = await evaluate(rule, {
       result: parsedResult,
       args,
+      probe,
     });
     return { content: [{ type: "text", text: stringify(reshaped) }] };
   } catch (err: unknown) {

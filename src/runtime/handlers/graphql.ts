@@ -1,6 +1,5 @@
 import type { GraphqlHandler } from "../config.ts";
-import type { ToolCallResult } from "./types.ts";
-import type { CompiledConnection } from "../connections.ts";
+import type { ToolCallResult, InvokeContext } from "./types.ts";
 import { resolveHeaders } from "../connections.ts";
 import { performFetch } from "../util/fetch.ts";
 import { render } from "../util/template.ts";
@@ -14,18 +13,19 @@ import { render } from "../util/template.ts";
 export async function invokeGraphql(
   handler: GraphqlHandler,
   args: Record<string, unknown>,
-  compiledConnections: Record<string, CompiledConnection>,
+  ctx: InvokeContext,
 ): Promise<ToolCallResult> {
   const spec = handler.graphql;
-  const conn = compiledConnections[spec.connection];
+  const conn = ctx.connections[spec.connection];
   if (conn === undefined) {
     return errorResult(`graphql: unknown connection "${spec.connection}"`);
   }
 
-  const query = render(spec.query, args);
+  const renderCtx = { ...args, probe: ctx.probe };
+  const query = render(spec.query, renderCtx);
   const variables = spec.variables === undefined
     ? undefined
-    : renderJsonLeaves(spec.variables, args);
+    : renderJsonLeaves(spec.variables, renderCtx);
   const payload: Record<string, unknown> = { query };
   if (variables !== undefined) payload["variables"] = variables;
 
@@ -94,13 +94,13 @@ export async function invokeGraphql(
   };
 }
 
-function renderJsonLeaves(value: unknown, args: Record<string, unknown>): unknown {
-  if (typeof value === "string") return render(value, args);
-  if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, args));
+function renderJsonLeaves(value: unknown, data: Record<string, unknown>): unknown {
+  if (typeof value === "string") return render(value, data);
+  if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, data));
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = renderJsonLeaves(v, args);
+      out[k] = renderJsonLeaves(v, data);
     }
     return out;
   }
