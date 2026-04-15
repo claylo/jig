@@ -53,7 +53,6 @@ import {
   fromJsonSchema,
   type CallToolResult,
   type JsonSchemaType,
-  type ReadResourceCallback,
   type ReadResourceResult,
   type RegisteredResource,
   type RegisteredTool,
@@ -240,14 +239,11 @@ export function createServer(
       const metadata: ResourceMetadata = {};
       if (spec.description !== undefined) metadata.description = spec.description;
       if (spec.mimeType !== undefined) metadata.mimeType = spec.mimeType;
-      // SDK signature: registerResource(name, uriOrTemplate: string, config, readCallback)
-      // FOLLOWUP(plan6): `handler` already satisfies ReadResourceCallback — the
-      // intermediate variable adds no type safety. Pass `handler` directly here
-      // once a follow-up pass lands; unlike registerTool above, there is no
-      // SDK generic-inference workaround to preserve. Keep `ReadResourceCallback`
-      // type import if still needed for the ResourceHandler alias; drop if not.
-      const readCallback: ReadResourceCallback = async (u) => handler(u);
-      return server.registerResource(spec.name, uri, metadata, readCallback);
+      // SDK signature: registerResource(name, uriOrTemplate: string, config, readCallback).
+      // `handler: ResourceHandler` already satisfies SDK's ReadResourceCallback —
+      // unlike registerTool above, there is no generic-inference workaround to
+      // preserve, so pass it directly.
+      return server.registerResource(spec.name, uri, metadata, handler);
     },
     trackSubscriptions() {
       const subscribed = new Set<string>();
