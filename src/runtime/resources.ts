@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { watch as fsWatch } from "node:fs";
 import type { ResourceSpec, ResourcesConfig, WatcherSpec, Handler } from "./config.ts";
 import type { JigServerHandle, RegisteredResourceHandle, SubscriptionTracker } from "./server.ts";
 import { invoke, type InvokeContext } from "./handlers/index.ts";
+import { isPathAllowed } from "./util/access.ts";
 
 /**
  * Validate the top-level `resources:` block.
@@ -230,8 +232,9 @@ export function startWatchers(
     if (!spec.watcher) continue;
     if (spec.watcher.type === "polling") {
       disposers.push(startPollingWatcher(spec, spec.watcher, server, tracker, ctx));
+    } else if (spec.watcher.type === "file") {
+      disposers.push(startFileWatcher(spec, spec.watcher, server, tracker));
     }
-    // file watcher lands in Phase 4
   }
   return disposers;
 }
@@ -293,4 +296,56 @@ function startPollingWatcher(
   void tick();
 
   return () => clearInterval(handle);
+}
+
+function startFileWatcher(
+  resource: ResourceSpec,
+  watcher: Extract<WatcherSpec, { type: "file" }>,
+  server: JigServerHandle,
+  tracker: SubscriptionTracker,
+): WatcherDisposer {
+  // isPathAllowed returns the canonical (symlink-resolved) path when
+  // allowed, or null when denied. Use the canonical form for fs.watch so
+  // the watched path stays consistent with the allowlist root — on macOS,
+  // /tmp resolves to /private/tmp and configureAccess canonicalizes the
+  // allowlist the same way.
+  const canonicalPath = isPathAllowed(watcher.path);
+  if (!canonicalPath) {
+    // Fail-fast at boot, same stderr shape as probe failures.
+    process.stderr.write(
+      `jig: resource "${resource.uri}" watcher path "${watcher.path}" is not in server.security.filesystem.allow\n\n`,
+    );
+    process.exit(1);
+  }
+
+  let handle: ReturnType<typeof fsWatch> | undefined;
+  try {
+    handle = fsWatch(canonicalPath, { persistent: false }, (_eventType) => {
+      if (tracker.isSubscribed(resource.uri)) {
+        void server.sendResourceUpdated(resource.uri).catch((err) => {
+          process.stderr.write(
+            `jig: watcher emit for "${resource.uri}" failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        });
+      }
+    });
+    handle.on("error", (err) => {
+      process.stderr.write(
+        `jig: fs.watch for "${resource.uri}" (${watcher.path}) error: ${err.message}\n`,
+      );
+    });
+  } catch (err) {
+    process.stderr.write(
+      `jig: failed to start fs.watch for "${resource.uri}" (${watcher.path}): ${err instanceof Error ? err.message : String(err)}\n\n`,
+    );
+    process.exit(1);
+  }
+
+  return () => {
+    try {
+      handle?.close();
+    } catch {
+      // watcher close errors are fine to swallow on shutdown
+    }
+  };
 }
