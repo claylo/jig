@@ -578,6 +578,98 @@ async function waitForLine(lines: string[], pred: (l: string) => boolean, ms = 5
   throw new Error(`timed out waiting for line matching predicate. Got:\n${lines.join("\n")}`);
 }
 
+test("file watcher emits resources/updated when the watched file changes", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-file-"));
+  const statePath = join(dir, "state.txt");
+  writeFileSync(statePath, "one");
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan6-file, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
+resources:
+  - uri: config://jig/state
+    name: State
+    handler:
+      exec: "cat ${statePath}"
+    watcher:
+      type: file
+      path: ${statePath}
+tools: []
+`);
+  try {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const stdoutLines: string[] = [];
+    let buf = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.trim()) stdoutLines.push(line);
+      }
+    });
+
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "0" },
+    } }) + "\n");
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "resources/subscribe", params: { uri: "config://jig/state" } }) + "\n");
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2'));
+
+    // Mutate the file; fs.watch fires immediately on macOS/Linux.
+    await new Promise((r) => setTimeout(r, 150));
+    writeFileSync(statePath, "two");
+
+    await waitForLine(stdoutLines, (l) => l.includes("notifications/resources/updated") && l.includes("config://jig/state"), 3_000);
+
+    child.stdin.end();
+    await new Promise((r) => child.on("close", r));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("file watcher rejects a path outside the filesystem allowlist at boot", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-file-deny-"));
+  const outside = "/etc/hosts"; // well-known path outside $dir
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan6-file-deny, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
+resources:
+  - uri: config://jig/state
+    name: State
+    handler:
+      inline: { text: "ok" }
+    watcher:
+      type: file
+      path: ${outside}
+tools: []
+`);
+  try {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const stderrChunks: string[] = [];
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => stderrChunks.push(c));
+    child.stdin.end();
+    const code: number | null = await new Promise((r) => child.on("close", r));
+    assert.equal(code, 1, "server must exit 1 when a watcher path is outside the allowlist");
+    const stderr = stderrChunks.join("");
+    assert.match(stderr, /watcher path .* not in .*allow/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("polling watcher does not emit when client is not subscribed", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "jig-plan6-nosub-"));
   const statePath = join(dir, "state.txt");
