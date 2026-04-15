@@ -1,5 +1,5 @@
 import type { ComputeHandler } from "../config.ts";
-import type { ToolCallResult } from "./types.ts";
+import type { ToolCallResult, InvokeContext } from "./types.ts";
 import { evaluate } from "../util/jsonlogic.ts";
 
 /**
@@ -24,9 +24,10 @@ import { evaluate } from "../util/jsonlogic.ts";
 export async function invokeCompute(
   handler: ComputeHandler,
   args: Record<string, unknown>,
+  ctx: InvokeContext,
 ): Promise<ToolCallResult> {
   try {
-    const value = await evaluate(handler.compute, args);
+    const value = await evaluate(handler.compute, { ...args, probe: ctx.probe });
     return { content: [{ type: "text", text: stringify(value) }] };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

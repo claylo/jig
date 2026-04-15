@@ -1,3 +1,5 @@
+import type { CompiledConnection } from "../connections.ts";
+
 /**
  * Shared handler result types. Plan 2 adds exec and dispatch, both
  * returning this shape. Keeping it in a neutral module avoids the
@@ -11,4 +13,18 @@ export interface ToolCallResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
   [key: string]: unknown;
+}
+
+/**
+ * Context passed to every handler invocation.
+ *
+ * connections: compiled connection definitions keyed by name.
+ * probe: resolved probe values from the boot sequence, keyed by probe
+ *   name. Empty {} when no probes are configured. Phase 4 plumbs the
+ *   resolver output here; Phase 3 seeds this with {}.
+ */
+export interface InvokeContext {
+  connections: Record<string, CompiledConnection>;
+  /** Resolved probe values, keyed by probe name. Empty {} when no probes. */
+  probe: Record<string, unknown>;
 }

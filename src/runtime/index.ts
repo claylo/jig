@@ -48,7 +48,9 @@ async function main(): Promise<void> {
   const server = createServer(config);
 
   const compiled = config.connections ? compileConnections(config.connections) : {};
-  const ctx = { connections: compiled };
+  // probe: {} is a Phase 3 placeholder; Phase 4 plumbs the resolveProbes()
+  // output here so tool handlers can reference probe values at call time.
+  const ctx = { connections: compiled, probe: {} as Record<string, unknown> };
 
   // Each tool's handler gets routed through the central invoke(). That
   // is what lets a dispatch tool reach exec, inline, or nested dispatch
@@ -58,7 +60,7 @@ async function main(): Promise<void> {
       const normalized = normalizeArgs(args);
       const raw = await invoke(tool.handler, normalized, ctx);
       if (tool.transform === undefined) return raw;
-      return applyTransform(raw, normalized, tool.transform);
+      return applyTransform(raw, normalized, ctx.probe, tool.transform);
     };
     server.registerTool(
       tool.name,

@@ -1,5 +1,5 @@
 import type { HttpHandler } from "../config.ts";
-import type { ToolCallResult } from "./types.ts";
+import type { ToolCallResult, InvokeContext } from "./types.ts";
 import type { CompiledConnection } from "../connections.ts";
 import { resolveHeaders } from "../connections.ts";
 import { performFetch } from "../util/fetch.ts";
@@ -22,34 +22,35 @@ import { render } from "../util/template.ts";
 export async function invokeHttp(
   handler: HttpHandler,
   args: Record<string, unknown>,
-  compiledConnections: Record<string, CompiledConnection>,
+  ctx: InvokeContext,
 ): Promise<ToolCallResult> {
   const spec = handler.http;
+  const renderCtx = { ...args, probe: ctx.probe };
 
   // Step 1 — base URL
   let baseUrl: string | undefined;
   let compiledConnection: CompiledConnection | undefined;
   if (spec.connection !== undefined) {
-    compiledConnection = compiledConnections[spec.connection];
+    compiledConnection = ctx.connections[spec.connection];
     if (compiledConnection === undefined) {
       return errorResult(`http: unknown connection "${spec.connection}"`);
     }
     baseUrl = compiledConnection.url;
   }
   if (spec.url !== undefined) {
-    baseUrl = render(spec.url, args);
+    baseUrl = render(spec.url, renderCtx);
   }
   if (baseUrl === undefined) {
     return errorResult(`http: neither connection nor url resolved to a URL`);
   }
 
   // Step 2 — render path + query + header values
-  const pathRendered = spec.path !== undefined ? render(spec.path, args) : "";
+  const pathRendered = spec.path !== undefined ? render(spec.path, renderCtx) : "";
   let fullUrl = baseUrl + pathRendered;
   if (spec.query !== undefined) {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(spec.query)) {
-      params.append(k, render(v, args));
+      params.append(k, render(v, renderCtx));
     }
     const qs = params.toString();
     if (qs.length > 0) {
@@ -64,7 +65,7 @@ export async function invokeHttp(
   const mergedHeaders: Record<string, string> = { ...connHeaders };
   if (spec.headers) {
     for (const [k, v] of Object.entries(spec.headers)) {
-      mergedHeaders[k] = render(v, args);
+      mergedHeaders[k] = render(v, renderCtx);
     }
   }
 
@@ -72,9 +73,9 @@ export async function invokeHttp(
   let body: string | undefined;
   if (spec.body !== undefined) {
     if (typeof spec.body === "string") {
-      body = render(spec.body, args);
+      body = render(spec.body, renderCtx);
     } else {
-      const jsonReady = renderJsonLeaves(spec.body, args);
+      const jsonReady = renderJsonLeaves(spec.body, renderCtx);
       body = JSON.stringify(jsonReady);
       const hasContentType = Object.keys(mergedHeaders).some(
         (k) => k.toLowerCase() === "content-type",
@@ -101,15 +102,15 @@ export async function invokeHttp(
 
 /**
  * Walk a body mapping and render Mustache in every string leaf against
- * args. Non-strings pass through.
+ * `data`. Non-strings pass through.
  */
-function renderJsonLeaves(value: unknown, args: Record<string, unknown>): unknown {
-  if (typeof value === "string") return render(value, args);
-  if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, args));
+function renderJsonLeaves(value: unknown, data: Record<string, unknown>): unknown {
+  if (typeof value === "string") return render(value, data);
+  if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, data));
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = renderJsonLeaves(v, args);
+      out[k] = renderJsonLeaves(v, data);
     }
     return out;
   }

@@ -7,7 +7,7 @@ import { invokeDispatch } from "../src/runtime/handlers/dispatch.ts";
 import { invokeCompute } from "../src/runtime/handlers/compute.ts";
 import { applyTransform } from "../src/runtime/util/transform.ts";
 import type { DispatchHandler, Handler, ComputeHandler } from "../src/runtime/config.ts";
-import type { ToolCallResult } from "../src/runtime/handlers/types.ts";
+import type { ToolCallResult, InvokeContext } from "../src/runtime/handlers/types.ts";
 import type { JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
 // Side-effect: ensures helpers are registered before the compute tests run.
 import "../src/runtime/util/helpers.ts";
@@ -28,8 +28,11 @@ async function startHandlerFixture(
   };
 }
 
+/** Minimal InvokeContext for unit tests that don't need connections or probes. */
+const emptyCtx: InvokeContext = { connections: {}, probe: {} };
+
 test("invokeExec returns stdout from /bin/echo as text content", async () => {
-  const result = await invokeExec({ exec: "/bin/echo hello" }, {});
+  const result = await invokeExec({ exec: "/bin/echo hello" }, {}, emptyCtx);
   assert.equal(result.isError, undefined);
   assert.equal(result.content[0]!.type, "text");
   assert.equal(result.content[0]!.text, "hello\n");
@@ -39,6 +42,7 @@ test("invokeExec renders Mustache tokens from args before splitting", async () =
   const result = await invokeExec(
     { exec: "/bin/echo {{name}}" },
     { name: "Alice" },
+    emptyCtx,
   );
   assert.equal(result.content[0]!.text, "Alice\n");
 });
@@ -47,6 +51,7 @@ test("invokeExec flags non-zero exit as isError with stderr", async () => {
   const result = await invokeExec(
     { exec: "node tests/fixtures/exit-nonzero.mjs" },
     {},
+    emptyCtx,
   );
   assert.equal(result.isError, true);
 });
@@ -55,13 +60,14 @@ test("invokeExec flags missing executable as isError", async () => {
   const result = await invokeExec(
     { exec: "/does/not/exist" },
     {},
+    emptyCtx,
   );
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /ENOENT|not found|no such file/i);
 });
 
 test("invokeExec rejects empty command after render as isError", async () => {
-  const result = await invokeExec({ exec: "{{missing}}" }, {});
+  const result = await invokeExec({ exec: "{{missing}}" }, {}, emptyCtx);
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /empty|no command/i);
 });
@@ -95,13 +101,13 @@ const greetDispatch: DispatchHandler = {
 };
 
 test("invokeDispatch routes to the matching case handler", async () => {
-  const result = await invokeDispatch(greetDispatch, { action: "hello" }, testInvoke);
+  const result = await invokeDispatch(greetDispatch, { action: "hello" }, testInvoke, {});
   assert.equal(result.isError, undefined);
   assert.equal(result.content[0]!.text, "hi");
 });
 
 test("invokeDispatch returns isError when the discriminator is missing", async () => {
-  const result = await invokeDispatch(greetDispatch, {}, testInvoke);
+  const result = await invokeDispatch(greetDispatch, {}, testInvoke, {});
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /action.*required/i);
 });
@@ -111,6 +117,7 @@ test("invokeDispatch returns isError when the action is unknown", async () => {
     greetDispatch,
     { action: "bogus" },
     testInvoke,
+    {},
   );
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /unknown action.*bogus/i);
@@ -122,6 +129,7 @@ test("invokeDispatch enforces per-action requires", async () => {
     greetDispatch,
     { action: "greet" },
     testInvoke,
+    {},
   );
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /name.*required.*greet/i);
@@ -140,6 +148,7 @@ test("invokeDispatch passes through args to the sub-handler", async () => {
     greetDispatch,
     { action: "greet", name: "Alice", extra: "preserved" },
     captureInvoke,
+    {},
   );
   assert.equal(capturedArgs.action, "greet");
   assert.equal(capturedArgs.name, "Alice");
@@ -148,14 +157,14 @@ test("invokeDispatch passes through args to the sub-handler", async () => {
 
 test("invokeCompute evaluates a simple var reference", async () => {
   const handler: ComputeHandler = { compute: { var: "name" } };
-  const result = await invokeCompute(handler, { name: "Ada" });
+  const result = await invokeCompute(handler, { name: "Ada" }, emptyCtx);
   assert.equal(result.isError, undefined);
   assert.equal(result.content[0]!.text, "Ada");
 });
 
 test("invokeCompute evaluates a helper call", async () => {
   const handler: ComputeHandler = { compute: { "os.platform": [] } };
-  const result = await invokeCompute(handler, {});
+  const result = await invokeCompute(handler, {}, emptyCtx);
   assert.equal(result.isError, undefined);
   assert.equal(typeof result.content[0]!.text, "string");
   assert.ok(result.content[0]!.text.length > 0);
@@ -166,14 +175,14 @@ test("invokeCompute JSON-stringifies object results", async () => {
   const handler: ComputeHandler = {
     compute: { preserve: { a: 1, b: "two" } },
   };
-  const result = await invokeCompute(handler, {});
+  const result = await invokeCompute(handler, {}, emptyCtx);
   assert.equal(result.isError, undefined);
   assert.equal(result.content[0]!.text, '{"a":1,"b":"two"}');
 });
 
 test("invokeCompute stringifies null/undefined as the literal strings", async () => {
   const handler: ComputeHandler = { compute: { var: "missing" } };
-  const result = await invokeCompute(handler, {});
+  const result = await invokeCompute(handler, {}, emptyCtx);
   assert.equal(result.isError, undefined);
   assert.equal(result.content[0]!.text, "null");
 });
@@ -181,7 +190,7 @@ test("invokeCompute stringifies null/undefined as the literal strings", async ()
 test("invokeCompute returns isError when the engine throws", async () => {
   // An unknown operator throws at the engine boundary.
   const handler: ComputeHandler = { compute: { unknownOperator: [1, 2] } as unknown as JsonLogicRule };
-  const result = await invokeCompute(handler, {});
+  const result = await invokeCompute(handler, {}, emptyCtx);
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /compute:/i);
 });
@@ -198,7 +207,7 @@ test("invokeDispatch with when: truthy runs the case handler", async () => {
       },
     },
   };
-  const result = await invokeDispatch(guarded, { action: "go" }, testInvoke);
+  const result = await invokeDispatch(guarded, { action: "go" }, testInvoke, {});
   assert.equal(result.isError, undefined);
   assert.equal(result.content[0]!.text, "went");
 });
@@ -215,7 +224,7 @@ test("invokeDispatch with when: falsy returns isError naming the action", async 
       },
     },
   };
-  const result = await invokeDispatch(guarded, { action: "go" }, testInvoke);
+  const result = await invokeDispatch(guarded, { action: "go" }, testInvoke, {});
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /guard.*go/i);
 });
@@ -232,9 +241,9 @@ test("invokeDispatch with when: referencing args", async () => {
       },
     },
   };
-  const pass = await invokeDispatch(guarded, { action: "go", flag: true }, testInvoke);
+  const pass = await invokeDispatch(guarded, { action: "go", flag: true }, testInvoke, {});
   assert.equal(pass.isError, undefined);
-  const block = await invokeDispatch(guarded, { action: "go", flag: false }, testInvoke);
+  const block = await invokeDispatch(guarded, { action: "go", flag: false }, testInvoke, {});
   assert.equal(block.isError, true);
 });
 
@@ -256,6 +265,7 @@ test("invokeDispatch with when: AND requires: — both must pass", async () => {
     both,
     { action: "go", id: "x", flag: true },
     testInvoke,
+    {},
   );
   assert.equal(ok.isError, undefined);
   // when fails — report guard failure (when is checked before requires)
@@ -263,6 +273,7 @@ test("invokeDispatch with when: AND requires: — both must pass", async () => {
     both,
     { action: "go", id: "x", flag: false },
     testInvoke,
+    {},
   );
   assert.equal(whenFail.isError, true);
   assert.match(whenFail.content[0]!.text, /guard/i);
@@ -271,6 +282,7 @@ test("invokeDispatch with when: AND requires: — both must pass", async () => {
     both,
     { action: "go", flag: true },
     testInvoke,
+    {},
   );
   assert.equal(requiresFail.isError, true);
   assert.match(requiresFail.content[0]!.text, /id.*required.*go/i);
@@ -289,7 +301,7 @@ test("invokeDispatch with when: engine error returns isError", async () => {
       },
     },
   };
-  const result = await invokeDispatch(broken, { action: "go" }, testInvoke);
+  const result = await invokeDispatch(broken, { action: "go" }, testInvoke, {});
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /guard.*go/i);
 });
@@ -301,6 +313,7 @@ test("applyTransform reshapes handler text using {result, args}", async () => {
   const reshaped = await applyTransform(
     handlerResult,
     { who: "Ada" } as Record<string, unknown>,
+    {},
     { cat: [{ var: "result" }, " / greeting for ", { var: "args.who" }] },
   );
   assert.equal(reshaped.isError, undefined);
@@ -313,6 +326,7 @@ test("applyTransform parses JSON result before reshaping when possible", async (
   };
   const reshaped = await applyTransform(
     handlerResult,
+    {},
     {},
     { "+": [{ var: "result.n" }, 1] },
   );
@@ -328,6 +342,7 @@ test("applyTransform passes isError results through without reshaping", async ()
   const reshaped = await applyTransform(
     handlerResult,
     {},
+    {},
     { cat: ["should not be applied"] },
   );
   assert.equal(reshaped.isError, true);
@@ -340,6 +355,7 @@ test("applyTransform returns isError when the engine throws", async () => {
   };
   const reshaped = await applyTransform(
     handlerResult,
+    {},
     {},
     { unknownOperator: [] } as unknown as import("../src/runtime/util/jsonlogic.ts").JsonLogicRule,
   );
@@ -365,7 +381,7 @@ test("invokeHttp GETs the composed URL and returns body", async () => {
         http: { connection: "api", method: "GET", path: "/{{slug}}" },
       },
       { slug: "hello" },
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(result.isError, undefined);
     assert.equal(seenUrl, "/hello");
@@ -403,7 +419,7 @@ test("invokeHttp merges connection + handler headers, handler wins on conflict",
         },
       },
       { id: "42" },
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(seenHeaders["x-connection"], "conn-value");
     assert.equal(seenHeaders["x-conflict"], "handler-wins");
@@ -440,7 +456,7 @@ test("invokeHttp serializes a body mapping as JSON with Content-Type", async () 
         },
       },
       { title: "hello", tag: "triage" },
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.match(seenCT, /application\/json/);
     const parsed = JSON.parse(seenBody) as { title: string; tags: string[] };
@@ -476,7 +492,7 @@ test("invokeHttp sends a raw body when body is a string", async () => {
         },
       },
       { key: "k", val: "v" },
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(seenBody, "key=k&val=v");
   } finally {
@@ -505,7 +521,7 @@ test("invokeHttp URL-encodes query params against args", async () => {
         },
       },
       { term: "hello world" },
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.match(seenUrl, /\/search\?/);
     assert.match(seenUrl, /q=hello(\+|%20)world/);
@@ -516,11 +532,10 @@ test("invokeHttp URL-encodes query params against args", async () => {
 });
 
 test("invokeHttp denies an unknown connection name", async () => {
-  const compiled = compileConnections({});
   const result = await invokeHttp(
     { http: { connection: "missing", method: "GET" } },
     {},
-    compiled,
+    emptyCtx,
   );
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /unknown connection "missing"/);
@@ -540,7 +555,7 @@ test("invokeHttp returns envelope when response: envelope", async () => {
         http: { connection: "api", method: "GET", response: "envelope" },
       },
       {},
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(result.isError, undefined);
     const env = JSON.parse(result.content[0]!.text) as {
@@ -569,7 +584,7 @@ test("invokeHttp uses handler url directly when no connection", async () => {
     const result = await invokeHttp(
       { http: { url: fix.url + "/direct", method: "GET" } },
       {},
-      {},
+      emptyCtx,
     );
     assert.equal(result.isError, undefined);
     assert.equal(seenUrl, "/direct");
@@ -605,7 +620,7 @@ test("invokeGraphql posts query + variables as JSON to the connection URL", asyn
         },
       },
       { team_id: "t-1" },
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(result.isError, undefined);
     assert.match(seenCT, /application\/json/);
@@ -637,7 +652,7 @@ test("invokeGraphql flips isError when the response includes errors:", async () 
     const result = await invokeGraphql(
       { graphql: { connection: "api", query: "{ bogus }" } },
       {},
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(result.isError, true);
     assert.match(result.content[0]!.text, /bogus.*not defined/);
@@ -662,7 +677,7 @@ test("invokeGraphql envelope mode returns data + errors + extensions", async () 
     const result = await invokeGraphql(
       { graphql: { connection: "api", query: "{ partial }", response: "envelope" } },
       {},
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(result.isError, undefined);
     const env = JSON.parse(result.content[0]!.text) as {
@@ -682,7 +697,7 @@ test("invokeGraphql denies an unknown connection name", async () => {
   const result = await invokeGraphql(
     { graphql: { connection: "missing", query: "{ x }" } },
     {},
-    compileConnections({}),
+    { connections: compileConnections({}), probe: {} },
   );
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /unknown connection "missing"/);
@@ -707,7 +722,7 @@ test("invokeGraphql respects connection Content-Type regardless of casing", asyn
     const result = await invokeGraphql(
       { graphql: { connection: "api", query: "{ ok }" } },
       {},
-      compiled,
+      { connections: compiled, probe: {} },
     );
     assert.equal(result.isError, undefined);
     // Author's casing wins; jig must not also append its own application/json.
@@ -715,4 +730,37 @@ test("invokeGraphql respects connection Content-Type regardless of casing", asyn
   } finally {
     await fix.close();
   }
+});
+
+test("probe context flows into exec handler render", async () => {
+  const ctx: InvokeContext = { connections: {}, probe: { greeting: "world" } };
+  const result = await invokeExec(
+    { exec: "echo {{probe.greeting}}" },
+    {},
+    ctx,
+  );
+  assert.equal(result.isError, undefined);
+  assert.match(result.content[0]!.text, /world/);
+});
+
+test("probe context flows into compute handler", async () => {
+  const ctx: InvokeContext = { connections: {}, probe: { region: "us-east-1" } };
+  const result = await invokeCompute(
+    { compute: { var: "probe.region" } },
+    {},
+    ctx,
+  );
+  // compute passes strings through verbatim (no JSON-encoding for plain strings)
+  assert.equal(result.content[0]!.text, "us-east-1");
+});
+
+test("probe context flows into transform", async () => {
+  const raw: ToolCallResult = { content: [{ type: "text", text: "tool result" }] };
+  const out = await applyTransform(
+    raw,
+    {},
+    { region: "us-east-1" },
+    { cat: ["[", { var: "probe.region" }, "] ", { var: "result" }] },
+  );
+  assert.equal(out.content[0]!.text, "[us-east-1] tool result");
 });

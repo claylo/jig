@@ -29,6 +29,7 @@ export async function invokeDispatch(
   handler: DispatchHandler,
   args: Record<string, unknown>,
   invoke: InvokeFn,
+  probe: Record<string, unknown>,
 ): Promise<ToolCallResult> {
   const { on, cases } = handler.dispatch;
   const actionValue = args[on];
@@ -48,7 +49,7 @@ export async function invokeDispatch(
   if (matched.when !== undefined) {
     let guardPassed: boolean;
     try {
-      const raw = await evaluate(matched.when, args);
+      const raw = await evaluate(matched.when, { ...args, probe });
       guardPassed = Boolean(raw);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
