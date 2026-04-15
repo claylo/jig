@@ -391,6 +391,120 @@ tools:
   },
 );
 
+test("resources/list returns registered resources", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-list-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan6-list, version: "0.0.1" }
+resources:
+  - uri: config://jig/hello
+    name: Hello
+    description: Greeting
+    mimeType: text/plain
+    handler:
+      inline:
+        text: "hello, world"
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        { jsonrpc: "2.0", id: 2, method: "resources/list" },
+      ],
+    );
+    const listResp = resp.find((r) => r.id === 2);
+    assert.ok(listResp, "resources/list response present");
+    const result = listResp.result as { resources: Array<{ uri: string; name: string; description?: string; mimeType?: string }> };
+    assert.equal(result.resources.length, 1);
+    assert.equal(result.resources[0]!.uri, "config://jig/hello");
+    assert.equal(result.resources[0]!.name, "Hello");
+    assert.equal(result.resources[0]!.description, "Greeting");
+    assert.equal(result.resources[0]!.mimeType, "text/plain");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resources/read returns the handler's text content", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-read-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan6-read, version: "0.0.1" }
+resources:
+  - uri: config://jig/hello
+    name: Hello
+    mimeType: text/plain
+    handler:
+      inline:
+        text: "hello, world"
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        { jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri: "config://jig/hello" } },
+      ],
+    );
+    const readResp = resp.find((r) => r.id === 2);
+    assert.ok(readResp, "resources/read response present");
+    const result = readResp.result as { contents: Array<{ uri: string; mimeType?: string; text: string }> };
+    assert.equal(result.contents.length, 1);
+    assert.equal(result.contents[0]!.uri, "config://jig/hello");
+    assert.equal(result.contents[0]!.mimeType, "text/plain");
+    assert.equal(result.contents[0]!.text, "hello, world");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resources/read surfaces isError handlers as a JSON-RPC error", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-read-err-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan6-read-err, version: "0.0.1" }
+resources:
+  - uri: config://jig/broken
+    name: Broken
+    handler:
+      exec: "sh -c 'echo oops >&2; exit 2'"
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        { jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri: "config://jig/broken" } },
+      ],
+    );
+    const readResp = resp.find((r) => r.id === 2);
+    assert.ok(readResp, "resources/read response present");
+    assert.ok(readResp.error, "read of an isError handler must return a JSON-RPC error");
+    assert.match(readResp.error!.message, /read failed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 import { createServer as createHttpServerInt } from "node:http";
 import type { AddressInfo as AddressInfoInt } from "node:net";
 

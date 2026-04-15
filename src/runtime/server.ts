@@ -53,7 +53,11 @@ import {
   fromJsonSchema,
   type CallToolResult,
   type JsonSchemaType,
+  type ReadResourceCallback,
+  type ReadResourceResult,
+  type RegisteredResource,
   type RegisteredTool,
+  type ResourceMetadata,
   type StandardSchemaWithJSON,
   type ToolAnnotations,
   type ToolCallback,
@@ -85,6 +89,22 @@ export interface RegisterToolSpec {
   annotations?: ToolAnnotations;
 }
 
+/**
+ * Minimal spec a caller passes into registerResource. Mirrors the shape
+ * of SDK's ResourceMetadata sans uri/name (which travel separately).
+ */
+export interface RegisterResourceSpec {
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+/** Handler signature for a resource read. */
+export type ResourceHandler = (uri: URL) => Promise<ReadResourceResult>;
+
+/** Re-export of SDK's RegisteredResource so sibling modules stay off the SDK. */
+export type RegisteredResourceHandle = RegisteredResource;
+
 export interface JigServerHandle {
   /**
    * Register one tool with the underlying McpServer. The adapter
@@ -99,6 +119,17 @@ export interface JigServerHandle {
     spec: RegisterToolSpec,
     handler: ToolHandler,
   ): RegisteredTool;
+  /**
+   * Register one resource at a static URI. The adapter forwards to
+   * McpServer.registerResource, which auto-wires resources/list,
+   * resources/templates/list, and resources/read request handlers on
+   * first call and sets capabilities.resources.listChanged.
+   */
+  registerResource(
+    uri: string,
+    spec: RegisterResourceSpec,
+    handler: ResourceHandler,
+  ): RegisteredResource;
   /** Attach to a transport and begin serving. */
   connect(transport: Transport): Promise<void>;
 }
@@ -178,6 +209,14 @@ export function createServer(
         },
         cb as ToolCallback,
       );
+    },
+    registerResource(uri, spec, handler) {
+      const metadata: ResourceMetadata = {};
+      if (spec.description !== undefined) metadata.description = spec.description;
+      if (spec.mimeType !== undefined) metadata.mimeType = spec.mimeType;
+      // SDK signature: registerResource(name, uriOrTemplate: string, config, readCallback)
+      const readCallback: ReadResourceCallback = async (u) => handler(u);
+      return server.registerResource(spec.name, uri, metadata, readCallback);
     },
     async connect(transport: Transport) {
       await server.connect(transport);
