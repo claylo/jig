@@ -60,6 +60,7 @@ import {
   type Transport,
 } from "@modelcontextprotocol/server";
 import type { JigConfig } from "./config.ts";
+import { render } from "./util/template.ts";
 
 /**
  * Lean alias for the JSON Schema shape jig passes across the adapter
@@ -102,7 +103,10 @@ export interface JigServerHandle {
   connect(transport: Transport): Promise<void>;
 }
 
-export function createServer(config: JigConfig): JigServerHandle {
+export function createServer(
+  config: JigConfig,
+  probe: Record<string, unknown>,
+): JigServerHandle {
   const server = new McpServer(
     {
       name: config.server.name,
@@ -150,7 +154,7 @@ export function createServer(config: JigConfig): JigServerHandle {
         return server.registerTool(
           name,
           {
-            description: spec.description,
+            description: render(spec.description, { probe }),
             inputSchema,
             ...(spec.title !== undefined && { title: spec.title }),
             ...(spec.annotations !== undefined && {
@@ -166,7 +170,7 @@ export function createServer(config: JigConfig): JigServerHandle {
       return server.registerTool(
         name,
         {
-          description: spec.description,
+          description: render(spec.description, { probe }),
           ...(spec.title !== undefined && { title: spec.title }),
           ...(spec.annotations !== undefined && {
             annotations: spec.annotations,

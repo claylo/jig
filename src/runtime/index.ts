@@ -8,6 +8,7 @@ import { createStdioTransport } from "./transports/stdio.ts";
 import { configureAccess, isHostAllowed } from "./util/access.ts";
 import { applyTransform } from "./util/transform.ts";
 import { compileConnections } from "./connections.ts";
+import { resolveProbes } from "./probes.ts";
 // Side-effect: registers the 16 built-in JSONLogic helpers per ADR-0008.
 // Keeps registration centralized at runtime boot rather than deferred
 // until a compute/when/transform rule triggers a helper lookup.
@@ -45,12 +46,17 @@ async function main(): Promise<void> {
     }
   }
 
-  const server = createServer(config);
-
   const compiled = config.connections ? compileConnections(config.connections) : {};
-  // probe: {} is a Phase 3 placeholder; Phase 4 plumbs the resolveProbes()
-  // output here so tool handlers can reference probe values at call time.
-  const ctx = { connections: compiled, probe: {} as Record<string, unknown> };
+
+  // resolveProbes calls process.exit(1) on any failure — no try/catch needed.
+  // Must run AFTER configureAccess (probes may themselves hit network hosts
+  // that must be allowlisted) and BEFORE createServer (createServer's
+  // registerTool closure captures probe for description rendering).
+  const probe = await resolveProbes(config.probes, compiled);
+
+  const server = createServer(config, probe);
+
+  const ctx = { connections: compiled, probe };
 
   // Each tool's handler gets routed through the central invoke(). That
   // is what lets a dispatch tool reach exec, inline, or nested dispatch
