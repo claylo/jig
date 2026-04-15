@@ -1,0 +1,58 @@
+# A Plan 6 example that exercises resources + watchers. Demonstrates:
+#   - static-uri resource with an inline handler (no watcher)
+#   - static-uri resource with an exec handler and a polling watcher
+#     (change_detection: hash; emit on content change)
+#   - resources/list + resources/read + resources/subscribe round-trip
+#
+# Run with `just smoke-resource`. Hermetic — no network; the polling
+# resource reads a fixed tmp path that the smoke harness writes.
+#
+# NOTE: the polling watcher re-invokes `exec: "cat ..."` every 500ms.
+# Authors declaring polling resources against rate-limited upstreams
+# (GitHub API, Linear GraphQL) will hit rate limits — plan intervals
+# accordingly.
+#
+# NOTE: jig's exec handler uses execFile, not sh -c — ${VAR} shell
+# expansion doesn't apply inside the command string. Hard-code paths,
+# or pass them via a probe (which resolves at boot).
+
+server:
+  name: jig-plan6-example
+  version: "1.0.0"
+  description: |
+    Demonstrates Plan 6: resources block, static URIs, polling watcher,
+    subscribe/unsubscribe, notifications/resources/updated.
+  security:
+    filesystem:
+      allow:
+        - /tmp
+        - /private/tmp
+
+resources:
+  - uri: config://jig/hello
+    name: Hello
+    description: A static greeting. No watcher — read-only.
+    mimeType: text/plain
+    handler:
+      inline:
+        text: |
+          Hello from the Plan 6 example.
+          This resource is static — reads are always the same.
+
+  - uri: config://jig/state
+    name: Mutable State
+    description: Polling-watched content. Smoke harness writes the file before the run.
+    mimeType: text/plain
+    handler:
+      exec: "cat /tmp/jig-plan6-state.txt"
+    watcher:
+      type: polling
+      interval_ms: 500
+      change_detection: hash
+
+tools:
+  - name: ping
+    description: Simple tool so clients that don't surface resources still see something.
+    handler:
+      inline:
+        text: pong
