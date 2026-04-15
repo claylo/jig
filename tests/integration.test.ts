@@ -810,6 +810,102 @@ tools: []
   }
 });
 
+test("prompts/list returns registered prompts with arguments", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-plist-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-plist, version: "0.0.1" }
+prompts:
+  - name: analyze_job
+    description: Analyze a completed job
+    arguments:
+      - name: jobId
+        description: The job ID
+        required: true
+      - name: depth
+        description: "summary | detailed"
+        required: false
+    template: "Analyze job {{jobId}} at {{depth}} depth."
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        { jsonrpc: "2.0", id: 2, method: "prompts/list" },
+      ],
+    );
+    const listResp = resp.find((r) => r.id === 2);
+    assert.ok(listResp, "prompts/list response present");
+    const result = listResp!.result as {
+      prompts: Array<{
+        name: string;
+        description?: string;
+        arguments?: Array<{ name: string; description?: string; required?: boolean }>;
+      }>;
+    };
+    assert.equal(result.prompts.length, 1);
+    assert.equal(result.prompts[0]!.name, "analyze_job");
+    assert.equal(result.prompts[0]!.description, "Analyze a completed job");
+    assert.equal(result.prompts[0]!.arguments!.length, 2);
+    assert.equal(result.prompts[0]!.arguments![0]!.name, "jobId");
+    assert.equal(result.prompts[0]!.arguments![0]!.required, true);
+    assert.equal(result.prompts[0]!.arguments![1]!.name, "depth");
+    assert.equal(result.prompts[0]!.arguments![1]!.required, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("prompts/get renders the template with provided args", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-pget-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-pget, version: "0.0.1" }
+prompts:
+  - name: greet
+    arguments:
+      - name: who
+        required: true
+    template: "Hello, {{who}}!"
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        { jsonrpc: "2.0", id: 2, method: "prompts/get", params: {
+          name: "greet",
+          arguments: { who: "world" },
+        } },
+      ],
+    );
+    const getResp = resp.find((r) => r.id === 2);
+    assert.ok(getResp, "prompts/get response present");
+    const result = getResp!.result as {
+      messages: Array<{ role: string; content: { type: string; text: string } }>;
+    };
+    assert.equal(result.messages.length, 1);
+    assert.equal(result.messages[0]!.role, "user");
+    assert.equal(result.messages[0]!.content.type, "text");
+    assert.equal(result.messages[0]!.content.text, "Hello, world!");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 import { createServer as createHttpServerInt } from "node:http";
 import type { AddressInfo as AddressInfoInt } from "node:net";
 
