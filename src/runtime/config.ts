@@ -7,6 +7,7 @@ import type { JsonLogicRule } from "./util/jsonlogic.ts";
 import { expandShimInTree } from "./util/interpolate.ts";
 import { validateProbes } from "./probes.ts";
 import { validateResources } from "./resources.ts";
+import { validatePrompts } from "./prompts.ts";
 
 export type { SecurityConfig };
 
@@ -131,6 +132,21 @@ export interface ResourceSpec {
 
 export type ResourcesConfig = ResourceSpec[];
 
+export interface PromptArgumentSpec {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface PromptSpec {
+  name: string;
+  description?: string;
+  arguments?: PromptArgumentSpec[];
+  template: string;
+}
+
+export type PromptsConfig = PromptSpec[];
+
 export type Handler =
   | InlineHandler
   | ExecHandler
@@ -169,6 +185,8 @@ export interface JigConfig {
   probes?: ProbesConfig;
   /** MCP resources — boot-registered content endpoints. */
   resources?: ResourcesConfig;
+  /** MCP prompts — boot-registered named template prompts. */
+  prompts?: PromptsConfig;
 }
 
 export function parseConfig(yamlText: string): JigConfig {
@@ -185,11 +203,13 @@ export function parseConfig(yamlText: string): JigConfig {
   const resources = validateResources(obj["resources"], (h, owner) =>
     validateHandlerPublic(h, owner),
   );
+  const prompts = validatePrompts(obj["prompts"]);
 
   const result: JigConfig = { server, tools };
   if (connections !== undefined) result.connections = connections;
   if (probes !== undefined) result.probes = probes;
   if (resources !== undefined) result.resources = resources;
+  if (prompts !== undefined) result.prompts = prompts;
   return result;
 }
 
