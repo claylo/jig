@@ -8,6 +8,7 @@ import { expandShimInTree } from "./util/interpolate.ts";
 import { validateProbes } from "./probes.ts";
 import { validateResources } from "./resources.ts";
 import { validatePrompts } from "./prompts.ts";
+import { validateCompletions } from "./completions.ts";
 
 export type { SecurityConfig };
 
@@ -163,6 +164,13 @@ export interface PromptSpec {
 
 export type PromptsConfig = PromptSpec[];
 
+export interface CompletionsConfig {
+  /** promptName -> argName -> value list */
+  prompts?: Record<string, Record<string, string[]>>;
+  /** templateString -> varName -> value list */
+  resources?: Record<string, Record<string, string[]>>;
+}
+
 export type Handler =
   | InlineHandler
   | ExecHandler
@@ -203,6 +211,8 @@ export interface JigConfig {
   resources?: ResourcesConfig;
   /** MCP prompts — boot-registered named template prompts. */
   prompts?: PromptsConfig;
+  /** Autocomplete value lists for prompt arguments and template variables. */
+  completions?: CompletionsConfig;
 }
 
 export function parseConfig(yamlText: string): JigConfig {
@@ -220,12 +230,14 @@ export function parseConfig(yamlText: string): JigConfig {
     validateHandlerPublic(h, owner),
   );
   const prompts = validatePrompts(obj["prompts"]);
+  const completions = validateCompletions(obj["completions"], prompts, resources);
 
   const result: JigConfig = { server, tools };
   if (connections !== undefined) result.connections = connections;
   if (probes !== undefined) result.probes = probes;
   if (resources !== undefined) result.resources = resources;
   if (prompts !== undefined) result.prompts = prompts;
+  if (completions !== undefined) result.completions = completions;
   return result;
 }
 
