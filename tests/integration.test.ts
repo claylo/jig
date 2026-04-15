@@ -1349,3 +1349,131 @@ tools: []
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("plan 7 round-trip: initialize + prompts/list + prompts/get + resources/templates/list + resources/read (templated) + completion/complete (both ref types)", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-e2e-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-e2e, version: "0.0.1" }
+resources:
+  - template: "queue://jobs/{status}"
+    name: Jobs by status
+    mimeType: application/json
+    handler:
+      exec: "echo jobs-status={{status}}"
+prompts:
+  - name: greet
+    arguments:
+      - name: who
+        required: true
+    template: "Hello, {{who}}!"
+completions:
+  prompts:
+    greet:
+      who: [alice, bob, carol]
+  resources:
+    "queue://jobs/{status}":
+      status: [pending, active, completed]
+tools: []
+`);
+  try {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const stdoutLines: string[] = [];
+    let buf = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.trim()) stdoutLines.push(line);
+      }
+    });
+    // Drain stderr so the child never blocks on a full pipe (>~64KB).
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", () => {});
+
+    const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+    // 1. initialize
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "e2e", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+
+    // 2. prompts/list
+    send({ jsonrpc: "2.0", id: 2, method: "prompts/list" });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2'));
+
+    // 3. prompts/get
+    send({ jsonrpc: "2.0", id: 3, method: "prompts/get", params: {
+      name: "greet", arguments: { who: "world" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":3'));
+
+    // 4. resources/templates/list
+    send({ jsonrpc: "2.0", id: 4, method: "resources/templates/list" });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":4'));
+
+    // 5. resources/read (templated)
+    send({ jsonrpc: "2.0", id: 5, method: "resources/read", params: {
+      uri: "queue://jobs/active",
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":5'));
+
+    // 6. completion/complete — prompt argument ref
+    send({ jsonrpc: "2.0", id: 6, method: "completion/complete", params: {
+      ref: { type: "ref/prompt", name: "greet" },
+      argument: { name: "who", value: "a" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":6'));
+
+    // 7. completion/complete — resource template variable ref
+    send({ jsonrpc: "2.0", id: 7, method: "completion/complete", params: {
+      ref: { type: "ref/resource", uri: "queue://jobs/{status}" },
+      argument: { name: "status", value: "p" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":7'));
+
+    child.stdin.end();
+    await new Promise((r) => child.on("close", r));
+
+    const parse = (id: number) =>
+      JSON.parse(stdoutLines.find((l) => l.includes(`"id":${id}`))!);
+
+    // Verify prompts/list
+    const plist = parse(2) as { result: { prompts: Array<{ name: string }> } };
+    assert.equal(plist.result.prompts.length, 1);
+    assert.equal(plist.result.prompts[0]!.name, "greet");
+
+    // Verify prompts/get rendered template
+    const pget = parse(3) as { result: { messages: Array<{ role: string; content: { text: string } }> } };
+    assert.equal(pget.result.messages[0]!.role, "user");
+    assert.equal(pget.result.messages[0]!.content.text, "Hello, world!");
+
+    // Verify resources/templates/list
+    const tlist = parse(4) as { result: { resourceTemplates: Array<{ uriTemplate: string }> } };
+    assert.equal(tlist.result.resourceTemplates.length, 1);
+    assert.equal(tlist.result.resourceTemplates[0]!.uriTemplate, "queue://jobs/{status}");
+
+    // Verify templated resources/read (exec handler renders the template variable)
+    const tread = parse(5) as { result: { contents: Array<{ uri: string; text: string }> } };
+    assert.equal(tread.result.contents[0]!.uri, "queue://jobs/active");
+    assert.match(tread.result.contents[0]!.text, /jobs-status=active/);
+
+    // Verify completion for prompt arg (prefix "a" matches "alice")
+    const comp6 = parse(6) as { result: { completion: { values: string[] } } };
+    assert.ok(comp6.result.completion.values.includes("alice"));
+
+    // Verify completion for template var (prefix "p" matches "pending")
+    const comp7 = parse(7) as { result: { completion: { values: string[] } } };
+    assert.ok(comp7.result.completion.values.includes("pending"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
