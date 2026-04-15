@@ -5,6 +5,11 @@ import type { JigServerHandle, RegisteredResourceHandle, SubscriptionTracker } f
 import { invoke, type InvokeContext } from "./handlers/index.ts";
 import { isPathAllowed } from "./util/access.ts";
 
+// Alias for the static branch of the ResourceSpec union. Watchers can
+// only attach to static URIs (template+watcher is rejected at parse
+// time), so every watcher helper narrows to this branch.
+type ResourceSpecStatic = Extract<ResourceSpec, { uri: string }>;
+
 /**
  * Validate the top-level `resources:` block.
  *
@@ -37,7 +42,7 @@ export function validateResources(
 }
 
 const ENTRY_KNOWN = new Set([
-  "uri", "name", "description", "mimeType", "handler", "watcher",
+  "uri", "template", "name", "description", "mimeType", "handler", "watcher",
 ]);
 
 function validateResourceEntry(
@@ -55,19 +60,42 @@ function validateResourceEntry(
       throw new Error(`config: resources[${index}]: unknown key "${key}"`);
     }
   }
-  if (typeof e["uri"] !== "string" || e["uri"].length === 0) {
-    throw new Error(`config: resources[${index}].uri is required and must be a non-empty string`);
+  const hasUri = typeof e["uri"] === "string" && e["uri"].length > 0;
+  const hasTemplate = typeof e["template"] === "string" && (e["template"] as string).length > 0;
+
+  if (!hasUri && !hasTemplate) {
+    throw new Error(`config: resources[${index}]: exactly one of uri or template is required`);
   }
-  const uri = e["uri"];
-  try {
-    new URL(uri);
-  } catch {
-    throw new Error(`config: resources[${index}].uri "${uri}" is not a valid URL`);
+  if (hasUri && hasTemplate) {
+    throw new Error(`config: resources[${index}]: exactly one of uri or template is required`);
   }
-  if (seen.has(uri)) {
-    throw new Error(`config: resources: duplicate uri "${uri}"`);
+
+  if (hasTemplate && e["watcher"] !== undefined) {
+    throw new Error(
+      `config: resources[${index}]: template resource cannot carry a watcher (watching a family-of-URIs is unbounded)`,
+    );
   }
-  seen.add(uri);
+
+  if (hasUri) {
+    const uri = e["uri"] as string;
+    try {
+      new URL(uri);
+    } catch {
+      throw new Error(`config: resources[${index}].uri "${uri}" is not a valid URL`);
+    }
+    if (seen.has(uri)) {
+      throw new Error(`config: resources: duplicate uri "${uri}"`);
+    }
+    seen.add(uri);
+  } else {
+    // template branch — track template string in the same seen set
+    // (a valid URL can't contain `{`, so no collisions are possible)
+    const tmpl = e["template"] as string;
+    if (seen.has(tmpl)) {
+      throw new Error(`config: resources: duplicate template "${tmpl}"`);
+    }
+    seen.add(tmpl);
+  }
 
   if (typeof e["name"] !== "string" || e["name"].length === 0) {
     throw new Error(`config: resources[${index}].name is required and must be a non-empty string`);
@@ -85,16 +113,15 @@ function validateResourceEntry(
   }
   const handler = validateHandler(e["handler"], `resources[${index}]`);
 
-  const out: ResourceSpec = {
-    uri,
-    name: e["name"],
-    handler,
-  };
+  const out: ResourceSpec = hasUri
+    ? { uri: e["uri"] as string, name: e["name"] as string, handler }
+    : { template: e["template"] as string, name: e["name"] as string, handler };
+
   if (e["description"] !== undefined) out.description = e["description"] as string;
   if (e["mimeType"] !== undefined) out.mimeType = e["mimeType"] as string;
 
   if (e["watcher"] !== undefined) {
-    out.watcher = validateWatcher(e["watcher"], index);
+    (out as ResourceSpecStatic).watcher = validateWatcher(e["watcher"], index);
   }
 
   return out;
@@ -176,31 +203,63 @@ export function registerResources(
 ): RegisteredResourceHandle[] {
   const handles: RegisteredResourceHandle[] = [];
   for (const spec of resources) {
-    const handle = server.registerResource(
-      spec.uri,
-      {
-        name: spec.name,
-        ...(spec.description !== undefined && { description: spec.description }),
-        ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
-      },
-      async (uri) => {
-        const raw = await invoke(spec.handler, {}, ctx);
-        if (raw.isError) {
-          const msg = raw.content[0]?.text ?? "<handler returned isError with no text>";
-          throw new Error(`resource "${uri.toString()}" read failed: ${msg}`);
-        }
-        return {
-          contents: [
-            {
-              uri: uri.toString(),
-              ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
-              text: raw.content[0]?.text ?? "",
-            },
-          ],
-        };
-      },
-    );
-    handles.push(handle);
+    if (typeof spec.template === "string") {
+      // URI-template branch: RFC 6570 variables are extracted by the SDK
+      // and passed into the handler alongside the probe context.
+      const handle = server.registerResourceTemplate(
+        spec.name,
+        spec.template,
+        {
+          ...(spec.description !== undefined && { description: spec.description }),
+          ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
+        },
+        async (uri, variables) => {
+          const args = { ...variables, probe: ctx.probe };
+          const raw = await invoke(spec.handler, args, ctx);
+          if (raw.isError) {
+            const msg = raw.content[0]?.text ?? "<handler returned isError with no text>";
+            throw new Error(`resource "${uri.toString()}" read failed: ${msg}`);
+          }
+          return {
+            contents: [
+              {
+                uri: uri.toString(),
+                ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
+                text: raw.content[0]?.text ?? "",
+              },
+            ],
+          };
+        },
+      );
+      handles.push(handle as unknown as RegisteredResourceHandle);
+    } else {
+      // Static URI branch — unchanged from Plan 6.
+      const handle = server.registerResource(
+        spec.uri,
+        {
+          name: spec.name,
+          ...(spec.description !== undefined && { description: spec.description }),
+          ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
+        },
+        async (uri) => {
+          const raw = await invoke(spec.handler, {}, ctx);
+          if (raw.isError) {
+            const msg = raw.content[0]?.text ?? "<handler returned isError with no text>";
+            throw new Error(`resource "${uri.toString()}" read failed: ${msg}`);
+          }
+          return {
+            contents: [
+              {
+                uri: uri.toString(),
+                ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
+                text: raw.content[0]?.text ?? "",
+              },
+            ],
+          };
+        },
+      );
+      handles.push(handle);
+    }
   }
   return handles;
 }
@@ -240,7 +299,7 @@ export function startWatchers(
 }
 
 function startPollingWatcher(
-  resource: ResourceSpec,
+  resource: ResourceSpecStatic,
   watcher: Extract<WatcherSpec, { type: "polling" }>,
   server: JigServerHandle,
   tracker: SubscriptionTracker,
@@ -299,7 +358,7 @@ function startPollingWatcher(
 }
 
 function startFileWatcher(
-  resource: ResourceSpec,
+  resource: ResourceSpecStatic,
   watcher: Extract<WatcherSpec, { type: "file" }>,
   server: JigServerHandle,
   tracker: SubscriptionTracker,
