@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { SecurityConfig } from "./util/access.ts";
 import type { JsonLogicRule } from "./util/jsonlogic.ts";
 import { expandShimInTree } from "./util/interpolate.ts";
+import { validateProbes } from "./probes.ts";
 
 export type { SecurityConfig };
 
@@ -73,6 +74,27 @@ export interface GraphqlHandler {
   };
 }
 
+/**
+ * A probe is a startup-time data fetch. The result is exposed as
+ * {{probe.NAME}} (Mustache) and { var: "probe.NAME" } (JSONLogic)
+ * across the rest of the YAML.
+ *
+ * Probes reuse the existing handler types but only graphql / http /
+ * exec are accepted (inline / compute / dispatch are nonsensical at
+ * boot — see Plan 5 design doc).
+ */
+export type ProbeHandler = GraphqlHandler | HttpHandler | { exec: string };
+
+export interface ProbeSpec {
+  handler: ProbeHandler;
+  /** Optional JSONLogic rule applied to the parsed-or-raw handler response. */
+  map?: JsonLogicRule;
+  /** Per-probe timeout in milliseconds. Default: 30000. */
+  timeout_ms?: number;
+}
+
+export type ProbesConfig = Record<string, ProbeSpec>;
+
 export type Handler =
   | InlineHandler
   | ExecHandler
@@ -107,6 +129,8 @@ export interface JigConfig {
   server: ServerMetadata;
   tools: ToolDefinition[];
   connections?: ConnectionsConfig;
+  /** Startup-time data fetches; resolved before tool registration. */
+  probes?: ProbesConfig;
 }
 
 export function parseConfig(yamlText: string): JigConfig {
@@ -119,9 +143,11 @@ export function parseConfig(yamlText: string): JigConfig {
   const server = validateServer(obj["server"]);
   const tools = validateTools(obj["tools"]);
   const connections = validateConnections(obj["connections"]);
+  const probes = validateProbes(obj["probes"]);
 
   const result: JigConfig = { server, tools };
   if (connections !== undefined) result.connections = connections;
+  if (probes !== undefined) result.probes = probes;
   return result;
 }
 
