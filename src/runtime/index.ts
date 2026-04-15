@@ -94,6 +94,10 @@ async function main(): Promise<void> {
     registerPrompts(server, config.prompts, ctx);
   }
 
+  if (config.completions) {
+    server.wireCompletions(config.completions);
+  }
+
   await server.connect(createStdioTransport());
 }
 
