@@ -94,3 +94,33 @@ smoke-probe:
       exit 1
     fi
     echo "$output" | tail -2 | jq .
+
+# Smoke-resource: verify the Plan 6 example boots, resources/list
+# returns both declared resources, resources/read returns the inline
+# resource's text, and subscribe/unsubscribe return empty results. The
+# polling watcher's update emit is NOT tested here (the integration
+# test covers that) — this recipe exercises the synchronous MCP
+# surface. Hermetic — no network, no mid-run mutation.
+smoke-resource:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    STATE_FILE=/tmp/jig-plan6-state.txt
+    echo "smoke-initial" > "$STATE_FILE"
+    trap 'rm -f "$STATE_FILE"' EXIT
+
+    requests='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
+    {"jsonrpc":"2.0","id":2,"method":"resources/list"}
+    {"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"config://jig/hello"}}
+    {"jsonrpc":"2.0","id":4,"method":"resources/subscribe","params":{"uri":"config://jig/state"}}
+    {"jsonrpc":"2.0","id":5,"method":"resources/unsubscribe","params":{"uri":"config://jig/state"}}'
+    output=$(echo "$requests" | node --experimental-transform-types src/runtime/index.ts --config examples/resources.yaml)
+    if [ -z "$output" ]; then
+      echo "smoke-resource: no response from runtime" >&2
+      exit 1
+    fi
+    # Print the response trio for visual inspection + structural assert
+    # via jq on the list+read responses.
+    echo "$output" | grep '"id":2' | head -1 | jq -e '.result.resources | length == 2' >/dev/null
+    echo "$output" | grep '"id":3' | head -1 | jq -e '.result.contents[0].text | contains("Hello")' >/dev/null
+    echo "$output" | tail -4 | jq .
+    echo "smoke-resource: OK"

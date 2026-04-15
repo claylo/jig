@@ -726,6 +726,90 @@ tools: []
   }
 });
 
+test("plan 6 resources round-trip: list + read + subscribe + polling update + unsubscribe", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-e2e-"));
+  const statePath = join(dir, "state.txt");
+  writeFileSync(statePath, "initial");
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server:
+  name: plan6-e2e
+  version: "0.0.1"
+  security:
+    filesystem:
+      allow: ["${dir}"]
+resources:
+  - uri: config://jig/hello
+    name: Hello
+    mimeType: text/plain
+    handler:
+      inline:
+        text: "hi"
+  - uri: config://jig/state
+    name: State
+    handler:
+      exec: "cat ${statePath}"
+    watcher:
+      type: polling
+      interval_ms: 150
+tools: []
+`);
+  try {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const stdoutLines: string[] = [];
+    let buf = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.trim()) stdoutLines.push(line);
+      }
+    });
+
+    const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "e2e", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+
+    send({ jsonrpc: "2.0", id: 2, method: "resources/list" });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2'));
+
+    send({ jsonrpc: "2.0", id: 3, method: "resources/read", params: { uri: "config://jig/hello" } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":3'));
+
+    send({ jsonrpc: "2.0", id: 4, method: "resources/subscribe", params: { uri: "config://jig/state" } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":4'));
+
+    await new Promise((r) => setTimeout(r, 250));
+    writeFileSync(statePath, "mutated");
+    await waitForLine(stdoutLines, (l) => l.includes("notifications/resources/updated") && l.includes("config://jig/state"), 3_000);
+
+    send({ jsonrpc: "2.0", id: 5, method: "resources/unsubscribe", params: { uri: "config://jig/state" } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":5'));
+
+    child.stdin.end();
+    await new Promise((r) => child.on("close", r));
+
+    const list = JSON.parse(stdoutLines.find((l) => l.includes('"id":2'))!) as { result: { resources: Array<{ uri: string }> } };
+    assert.equal(list.result.resources.length, 2);
+    const read = JSON.parse(stdoutLines.find((l) => l.includes('"id":3'))!) as { result: { contents: Array<{ text: string }> } };
+    assert.equal(read.result.contents[0]!.text, "hi");
+    const updated = stdoutLines.find((l) => l.includes("notifications/resources/updated"));
+    assert.ok(updated, "update notification");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 import { createServer as createHttpServerInt } from "node:http";
 import type { AddressInfo as AddressInfoInt } from "node:net";
 
