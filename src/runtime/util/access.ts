@@ -160,7 +160,14 @@ function expandFsEntry(entry: string, runtimeRoot: string): string {
     throw new Error(`config.security.filesystem.allow: entry resolved to an empty path`);
   }
 
-  return trimmed;
+  // Canonicalize via realpathSync so allowed roots match the canonical
+  // paths that isPathAllowed resolves for inputs (on macOS, /var → /private/var).
+  try {
+    return realpathSync.native(trimmed);
+  } catch {
+    // Path doesn't exist yet — return as-is; isPathAllowed will handle it.
+    return trimmed;
+  }
 }
 
 /**
