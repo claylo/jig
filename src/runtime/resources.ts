@@ -1,4 +1,6 @@
 import type { ResourceSpec, ResourcesConfig, WatcherSpec, Handler } from "./config.ts";
+import type { JigServerHandle, RegisteredResourceHandle } from "./server.ts";
+import { invoke, type InvokeContext } from "./handlers/index.ts";
 
 /**
  * Validate the top-level `resources:` block.
@@ -143,4 +145,59 @@ function validateWatcher(v: unknown, resourceIndex: number): WatcherSpec {
     throw new Error(`config: resources[${resourceIndex}].watcher file watcher requires path (non-empty string)`);
   }
   return { type: "file", path };
+}
+
+/**
+ * Handle type alias for the return value of registerResource. Named so
+ * the future graceful-shutdown plan can collect these per resource.
+ */
+export type { RegisteredResourceHandle };
+
+/**
+ * Register every resource in the config with the MCP server. Returns an
+ * array of SDK handles for future reload/shutdown consumers; v1 ignores
+ * the return value.
+ *
+ * Each resource's read callback invokes the configured handler with
+ * empty args and the boot InvokeContext (connections + probe). The
+ * handler's ToolCallResult is translated into a ReadResourceResult:
+ *   - content[0].text becomes contents[0].text
+ *   - mimeType carries through from the resource spec
+ *   - isError: true becomes a thrown Error — the SDK surfaces it as a
+ *     JSON-RPC error response
+ */
+export function registerResources(
+  server: JigServerHandle,
+  resources: ResourcesConfig,
+  ctx: InvokeContext,
+): RegisteredResourceHandle[] {
+  const handles: RegisteredResourceHandle[] = [];
+  for (const spec of resources) {
+    const handle = server.registerResource(
+      spec.uri,
+      {
+        name: spec.name,
+        ...(spec.description !== undefined && { description: spec.description }),
+        ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
+      },
+      async (uri) => {
+        const raw = await invoke(spec.handler, {}, ctx);
+        if (raw.isError) {
+          const msg = raw.content[0]?.text ?? "<handler returned isError with no text>";
+          throw new Error(`resource "${uri.toString()}" read failed: ${msg}`);
+        }
+        return {
+          contents: [
+            {
+              uri: uri.toString(),
+              ...(spec.mimeType !== undefined && { mimeType: spec.mimeType }),
+              text: raw.content[0]?.text ?? "",
+            },
+          ],
+        };
+      },
+    );
+    handles.push(handle);
+  }
+  return handles;
 }

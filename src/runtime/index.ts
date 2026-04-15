@@ -2,6 +2,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
 import { createServer, type ToolHandler } from "./server.ts";
+import { registerResources } from "./resources.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
@@ -76,6 +77,10 @@ async function main(): Promise<void> {
       },
       handler,
     );
+  }
+
+  if (config.resources) {
+    registerResources(server, config.resources, ctx);
   }
 
   await server.connect(createStdioTransport());
