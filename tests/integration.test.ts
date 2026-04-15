@@ -527,3 +527,81 @@ tools:
     }
   },
 );
+
+test(
+  "graphql probe value flows into tool handler at request time",
+  { timeout: 15_000 },
+  async () => {
+    const seen: string[] = [];
+    const server = createHttpServerInt((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        seen.push(req.url ?? "");
+        if (req.url === "/graphql") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ data: { region: "us-east-1" } }));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfoInt).port;
+    const fixtureUrl = `http://127.0.0.1:${port}`;
+
+    const dir = mkdtempSync(join(tmpdir(), "jig-plan5-gql-"));
+    const configPath = join(dir, "jig.yaml");
+    writeFileSync(
+      configPath,
+      `server:
+  name: plan5-gql-int
+  version: "0.0.1"
+connections:
+  api:
+    url: ${fixtureUrl}/graphql
+    timeout_ms: 2000
+probes:
+  region_envelope:
+    graphql:
+      connection: api
+      query: "{ region }"
+    map: { var: "result.region" }
+tools:
+  - name: where
+    description: x
+    handler:
+      exec: "echo region={{probe.region_envelope}}"
+`,
+    );
+    try {
+      const responses = await sendRpc(
+        join(process.cwd(), "src/runtime/index.ts"),
+        configPath,
+        [
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              clientInfo: { name: "t", version: "0" },
+            },
+          },
+          { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "where", arguments: {} } },
+        ],
+      );
+      // Probe ran at boot, fixture saw the graphql request.
+      assert.ok(seen.includes("/graphql"), "fixture should have seen /graphql");
+      const out = responses.find((r) => r.id === 2)!.result as {
+        content: { text: string }[];
+      };
+      assert.match(out.content[0]!.text, /region=us-east-1/);
+    } finally {
+      rmSync(dir, { recursive: true });
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  },
+);

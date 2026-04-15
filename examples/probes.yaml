@@ -1,0 +1,61 @@
+# A Plan 5 example that exercises probes. Demonstrates:
+#   - exec probe: capture the current git SHA at boot
+#   - exec probe: capture the current shell user
+#   - probe value baked into a tool description
+#   - probe value referenced in a transform via JSONLogic
+#   - probe value referenced in a handler command line via Mustache
+#
+# Run with `just smoke-probe` (hermetic — no network probes).
+
+server:
+  name: jig-plan5-example
+  version: "1.0.0"
+  description: |
+    Demonstrates Plan 5: probes block, fail-fast at boot,
+    {{probe.NAME}} surface across description / handler / transform.
+
+probes:
+  git_sha:
+    exec: "git rev-parse --short HEAD"
+  current_user:
+    exec: "whoami"
+
+tools:
+  - name: example
+    description: |
+      Built from commit {{probe.git_sha}} by {{probe.current_user}}.
+      Actions:
+        echo  → echo a message back, prefixed with the user
+        help  → static action help
+
+    input:
+      action:
+        type: string
+        required: true
+      message:
+        type: string
+
+    handler:
+      dispatch:
+        on: action
+        cases:
+          echo:
+            requires: [message]
+            handler:
+              exec: "echo [{{probe.current_user}}] {{message}}"
+
+          help:
+            handler:
+              inline:
+                text: |
+                  example: { echo | help }
+                    echo  requires message
+                    help  always valid
+
+    # Prefix every tool response with the resolved git SHA as provenance.
+    transform:
+      cat:
+        - "(@"
+        - { var: "probe.git_sha" }
+        - ") "
+        - { var: "result" }
