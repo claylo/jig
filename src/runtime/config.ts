@@ -6,6 +6,7 @@ import type { SecurityConfig } from "./util/access.ts";
 import type { JsonLogicRule } from "./util/jsonlogic.ts";
 import { expandShimInTree } from "./util/interpolate.ts";
 import { validateProbes } from "./probes.ts";
+import { validateResources } from "./resources.ts";
 
 export type { SecurityConfig };
 
@@ -95,6 +96,41 @@ export interface ProbeSpec {
 
 export type ProbesConfig = Record<string, ProbeSpec>;
 
+/**
+ * Watcher types supported in v1. Polling re-invokes the handler on an
+ * interval and compares content hashes; file uses fs.watch on a single
+ * filesystem path. Webhook and glob paths are deferred — see Plan 6
+ * design doc, "Out of scope".
+ */
+export type WatcherSpec =
+  | {
+      type: "polling";
+      interval_ms: number;
+      change_detection?: "hash" | "always";
+    }
+  | {
+      type: "file";
+      path: string;
+    };
+
+/**
+ * A single declared resource. URI is the addressable identity (static —
+ * no templates in v1). Handler reuses the existing tool handler types;
+ * the resource read callback invokes it with empty args and translates
+ * the ToolCallResult's first text content into a ReadResourceResult.
+ * Watcher is optional; when absent, the resource is read-only.
+ */
+export interface ResourceSpec {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+  handler: Handler;
+  watcher?: WatcherSpec;
+}
+
+export type ResourcesConfig = ResourceSpec[];
+
 export type Handler =
   | InlineHandler
   | ExecHandler
@@ -131,6 +167,8 @@ export interface JigConfig {
   connections?: ConnectionsConfig;
   /** Startup-time data fetches; resolved before tool registration. */
   probes?: ProbesConfig;
+  /** MCP resources — boot-registered content endpoints. */
+  resources?: ResourcesConfig;
 }
 
 export function parseConfig(yamlText: string): JigConfig {
@@ -144,10 +182,14 @@ export function parseConfig(yamlText: string): JigConfig {
   const tools = validateTools(obj["tools"]);
   const connections = validateConnections(obj["connections"]);
   const probes = validateProbes(obj["probes"]);
+  const resources = validateResources(obj["resources"], (h, owner) =>
+    validateHandlerPublic(h, owner),
+  );
 
   const result: JigConfig = { server, tools };
   if (connections !== undefined) result.connections = connections;
   if (probes !== undefined) result.probes = probes;
+  if (resources !== undefined) result.resources = resources;
   return result;
 }
 
@@ -367,6 +409,15 @@ function validateHandler(v: unknown, toolName: string): Handler {
   throw new Error(
     `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http, graphql)`,
   );
+}
+
+/**
+ * Public wrapper over validateHandler so sibling modules (resources.ts)
+ * can delegate handler validation under their own owner labels
+ * ("resources[0]" etc.) without duplicating the handler-type dispatch.
+ */
+export function validateHandlerPublic(h: unknown, ownerLabel: string): Handler {
+  return validateHandler(h, ownerLabel);
 }
 
 function validateDispatch(v: unknown, toolName: string): DispatchHandler {
