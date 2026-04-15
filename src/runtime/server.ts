@@ -67,7 +67,7 @@ import {
   type ToolCallback,
   type Transport,
 } from "@modelcontextprotocol/server";
-import type { JigConfig } from "./config.ts";
+import type { CompletionsConfig, JigConfig } from "./config.ts";
 import { render } from "./util/template.ts";
 
 /**
@@ -123,6 +123,16 @@ export interface RegisterResourceSpec {
  */
 export interface SubscriptionTracker {
   isSubscribed(uri: string): boolean;
+}
+
+/**
+ * Pre-built lookup index for the completion/complete handler.
+ * Prompt path: prompts[promptName][argName] -> values
+ * Resource path: resources[templateString][varName] -> values
+ */
+export interface CompletionsIndex {
+  prompts: Map<string, Map<string, string[]>>;
+  resources: Map<string, Map<string, string[]>>;
 }
 
 /** Handler signature for a resource read. */
@@ -196,9 +206,50 @@ export interface JigServerHandle {
     spec: RegisterPromptSpec,
     handler: (args: Record<string, string>) => GetPromptResult,
   ): RegisteredPromptHandle;
+  /**
+   * Build the completions index from config and wire a low-level
+   * completion/complete request handler. Advertises
+   * capabilities.completions: {} via registerCapabilities.
+   * MUST be called before server.connect().
+   */
+  wireCompletions(completions: CompletionsConfig): void;
   /** Attach to a transport and begin serving. */
   connect(transport: Transport): Promise<void>;
 }
+
+function buildCompletionsIndex(
+  completions: CompletionsConfig,
+): CompletionsIndex {
+  const idx: CompletionsIndex = {
+    prompts: new Map(),
+    resources: new Map(),
+  };
+  if (completions.prompts) {
+    for (const [promptName, argMap] of Object.entries(completions.prompts)) {
+      const inner = new Map<string, string[]>();
+      for (const [argName, values] of Object.entries(argMap)) {
+        inner.set(argName, values);
+      }
+      idx.prompts.set(promptName, inner);
+    }
+  }
+  if (completions.resources) {
+    for (const [templateStr, varMap] of Object.entries(completions.resources)) {
+      const inner = new Map<string, string[]>();
+      for (const [varName, values] of Object.entries(varMap)) {
+        inner.set(varName, values);
+      }
+      idx.resources.set(templateStr, inner);
+    }
+  }
+  return idx;
+}
+
+const EMPTY_COMPLETION_RESULT: {
+  completion: { values: string[]; total: number; hasMore: boolean };
+} = {
+  completion: { values: [], total: 0, hasMore: false },
+};
 
 export function createServer(
   config: JigConfig,
@@ -346,6 +397,36 @@ export function createServer(
         },
         cb as Parameters<typeof server.registerPrompt>[2],
       );
+    },
+    wireCompletions(completions) {
+      const idx = buildCompletionsIndex(completions);
+      const lowLevel = server.server;
+      lowLevel.registerCapabilities({ completions: {} });
+      lowLevel.setRequestHandler("completion/complete", async (req) => {
+        const { ref, argument } = req.params;
+
+        let values: string[] | undefined;
+
+        if (ref.type === "ref/prompt") {
+          values = idx.prompts.get(ref.name)?.get(argument.name);
+        } else if (ref.type === "ref/resource") {
+          values = idx.resources.get(ref.uri)?.get(argument.name);
+        }
+
+        if (!values) return EMPTY_COMPLETION_RESULT;
+
+        const prefix = argument.value.toLowerCase();
+        const allMatching = values.filter((v) => v.toLowerCase().startsWith(prefix));
+        const capped = allMatching.slice(0, 100);
+
+        return {
+          completion: {
+            values: capped,
+            total: values.length,
+            hasMore: capped.length < allMatching.length,
+          },
+        };
+      });
     },
     async connect(transport: Transport) {
       await server.connect(transport);

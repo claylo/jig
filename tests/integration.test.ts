@@ -1200,3 +1200,152 @@ tools: []
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("completion/complete returns prefix-filtered values for a prompt argument ref", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-comp-prompt-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-comp-prompt, version: "0.0.1" }
+prompts:
+  - name: analyze_job
+    arguments:
+      - name: depth
+        required: false
+    template: "Analyze at {{depth}} depth."
+completions:
+  prompts:
+    analyze_job:
+      depth:
+        - summary
+        - detailed
+        - verbose
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "completion/complete",
+          params: {
+            ref: { type: "ref/prompt", name: "analyze_job" },
+            argument: { name: "depth", value: "de" },
+          },
+        },
+      ],
+    );
+    const compResp = resp.find((r) => r.id === 2);
+    assert.ok(compResp, "completion/complete response present");
+    const result = compResp!.result as {
+      completion: { values: string[]; total: number; hasMore: boolean };
+    };
+    assert.deepEqual(result.completion.values, ["detailed"]);
+    assert.equal(result.completion.total, 3);
+    assert.equal(result.completion.hasMore, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("completion/complete returns prefix-filtered values for a resource template variable ref", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-comp-res-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-comp-res, version: "0.0.1" }
+resources:
+  - template: "queue://jobs/{status}"
+    name: Jobs by status
+    handler:
+      inline:
+        text: "[]"
+completions:
+  resources:
+    "queue://jobs/{status}":
+      status:
+        - pending
+        - active
+        - completed
+        - failed
+        - cancelled
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "completion/complete",
+          params: {
+            ref: { type: "ref/resource", uri: "queue://jobs/{status}" },
+            argument: { name: "status", value: "c" },
+          },
+        },
+      ],
+    );
+    const compResp = resp.find((r) => r.id === 2);
+    assert.ok(compResp, "completion/complete response present");
+    const result = compResp!.result as {
+      completion: { values: string[]; total: number; hasMore: boolean };
+    };
+    assert.equal(result.completion.values.length, 2);
+    assert.ok(result.completion.values.includes("completed"), "expected completed");
+    assert.ok(result.completion.values.includes("cancelled"), "expected cancelled");
+    assert.equal(result.completion.total, 5);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("completion/complete returns empty for an unknown ref", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-comp-unknown-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-comp-unknown, version: "0.0.1" }
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "completion/complete",
+          params: {
+            ref: { type: "ref/prompt", name: "nonexistent" },
+            argument: { name: "arg", value: "x" },
+          },
+        },
+      ],
+    );
+    const compResp = resp.find((r) => r.id === 2);
+    // No completions: block means no handler wired and no capability
+    // advertised. SDK may surface unknown ref as either an error or an
+    // empty result; both are acceptable — the check is just no-crash.
+    assert.ok(compResp, "got a response for completion/complete");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
