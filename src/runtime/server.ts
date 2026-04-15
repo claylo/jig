@@ -50,13 +50,16 @@
 
 import {
   McpServer,
+  ResourceTemplate,
   fromJsonSchema,
   type CallToolResult,
   type GetPromptResult,
   type JsonSchemaType,
   type ReadResourceResult,
+  type ReadResourceTemplateCallback,
   type RegisteredPrompt,
   type RegisteredResource,
+  type RegisteredResourceTemplate,
   type RegisteredTool,
   type ResourceMetadata,
   type StandardSchemaWithJSON,
@@ -153,6 +156,18 @@ export interface JigServerHandle {
     spec: RegisterResourceSpec,
     handler: ResourceHandler,
   ): RegisteredResource;
+  /**
+   * Register a URI-template resource. The SDK auto-wires
+   * resources/templates/list and handles RFC 6570 variable extraction
+   * on resources/read. list: undefined means the template does not
+   * enumerate on resources/list.
+   */
+  registerResourceTemplate(
+    name: string,
+    template: string,
+    metadata: { description?: string; mimeType?: string },
+    handler: (uri: URL, variables: Record<string, string>) => Promise<ReadResourceResult>,
+  ): RegisteredResourceTemplate;
   /**
    * Wire resources/subscribe + resources/unsubscribe request handlers
    * on the underlying Server (McpServer's high-level class omits them)
@@ -270,6 +285,15 @@ export function createServer(
       // unlike registerTool above, there is no generic-inference workaround to
       // preserve, so pass it directly.
       return server.registerResource(spec.name, uri, metadata, handler);
+    },
+    registerResourceTemplate(name, templateStr, metadata, handler) {
+      const tmpl = new ResourceTemplate(templateStr, { list: undefined });
+      const resourceMetadata: ResourceMetadata = {};
+      if (metadata.description !== undefined) resourceMetadata.description = metadata.description;
+      if (metadata.mimeType !== undefined) resourceMetadata.mimeType = metadata.mimeType;
+      const cb: ReadResourceTemplateCallback = (uri, variables) =>
+        handler(uri, variables as Record<string, string>);
+      return server.registerResource(name, tmpl, resourceMetadata, cb);
     },
     trackSubscriptions() {
       const subscribed = new Set<string>();

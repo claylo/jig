@@ -1120,3 +1120,83 @@ tools:
     }
   },
 );
+
+test("resources/templates/list returns registered template resources", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-tlist-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-tlist, version: "0.0.1" }
+resources:
+  - template: "queue://jobs/{status}"
+    name: Jobs by status
+    mimeType: application/json
+    handler:
+      inline:
+        text: "[]"
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        { jsonrpc: "2.0", id: 2, method: "resources/templates/list" },
+      ],
+    );
+    const listResp = resp.find((r) => r.id === 2);
+    assert.ok(listResp, "resources/templates/list response present");
+    const result = listResp!.result as {
+      resourceTemplates: Array<{ uriTemplate: string; name: string; mimeType?: string }>;
+    };
+    assert.equal(result.resourceTemplates.length, 1);
+    assert.equal(result.resourceTemplates[0]!.uriTemplate, "queue://jobs/{status}");
+    assert.equal(result.resourceTemplates[0]!.name, "Jobs by status");
+    assert.equal(result.resourceTemplates[0]!.mimeType, "application/json");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resources/read resolves a templated resource with variables", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan7-tread-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan7-tread, version: "0.0.1" }
+resources:
+  - template: "queue://jobs/{status}"
+    name: Jobs by status
+    mimeType: text/plain
+    handler:
+      exec: "echo jobs with status={{status}}"
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+        { jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri: "queue://jobs/pending" } },
+      ],
+    );
+    const readResp = resp.find((r) => r.id === 2);
+    assert.ok(readResp, "resources/read response present");
+    const result = readResp!.result as {
+      contents: Array<{ uri: string; mimeType?: string; text: string }>;
+    };
+    assert.equal(result.contents.length, 1);
+    assert.equal(result.contents[0]!.uri, "queue://jobs/pending");
+    assert.match(result.contents[0]!.text, /jobs with status=pending/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

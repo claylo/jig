@@ -115,20 +115,36 @@ export type WatcherSpec =
     };
 
 /**
- * A single declared resource. URI is the addressable identity (static —
- * no templates in v1). Handler reuses the existing tool handler types;
- * the resource read callback invokes it with empty args and translates
- * the ToolCallResult's first text content into a ReadResourceResult.
- * Watcher is optional; when absent, the resource is read-only.
+ * Base fields shared by static-URI and URI-template resources. Handler
+ * reuses the existing tool handler types; the resource read callback
+ * invokes it and translates the ToolCallResult's first text content into
+ * a ReadResourceResult.
+ *
+ * ResourceSpec is a discriminated union — a resource entry must carry
+ * exactly one of uri: (static, Plan 6) or template: (RFC 6570, Plan 7).
+ * Watcher is only valid on static resources; template+watcher is rejected
+ * at parse time (watching a family-of-URIs is unbounded).
  */
-export interface ResourceSpec {
-  uri: string;
+interface ResourceSpecBase {
   name: string;
   description?: string;
   mimeType?: string;
   handler: Handler;
+}
+
+interface ResourceSpecStatic extends ResourceSpecBase {
+  uri: string;
+  template?: never;
   watcher?: WatcherSpec;
 }
+
+interface ResourceSpecTemplated extends ResourceSpecBase {
+  template: string;
+  uri?: never;
+  watcher?: never;
+}
+
+export type ResourceSpec = ResourceSpecStatic | ResourceSpecTemplated;
 
 export type ResourcesConfig = ResourceSpec[];
 

@@ -73,7 +73,7 @@ resources:
     handler: { inline: { text: x } }
 tools: []
 `;
-  assert.throws(() => parseConfig(yamlText), /resources\[0\]\.uri is required/);
+  assert.throws(() => parseConfig(yamlText), /resources\[0\]: exactly one of uri or template/);
 });
 
 test("config rejects a resource with an invalid uri", () => {
@@ -204,4 +204,83 @@ resources:
 tools: []
 `;
   assert.throws(() => parseConfig(yamlText), /polling watcher: unknown key "path"/);
+});
+
+test("config accepts a resources: entry with template: instead of uri:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+resources:
+  - template: "queue://jobs/{status}"
+    name: Jobs by status
+    mimeType: application/json
+    handler:
+      inline:
+        text: "[]"
+tools: []
+`;
+  const cfg = parseConfig(yamlText);
+  assert.ok(cfg.resources, "resources must be present");
+  assert.equal(cfg.resources.length, 1);
+  const r = cfg.resources[0]!;
+  assert.equal(r.template, "queue://jobs/{status}");
+  assert.equal(r.name, "Jobs by status");
+  assert.equal(r.mimeType, "application/json");
+  assert.ok(!("uri" in r) || r.uri === undefined);
+});
+
+test("config rejects a resource with both uri: and template:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+resources:
+  - uri: "queue://jobs"
+    template: "queue://jobs/{status}"
+    name: Bad
+    handler: { inline: { text: x } }
+tools: []
+`;
+  assert.throws(() => parseConfig(yamlText), /exactly one of uri or template/);
+});
+
+test("config rejects a resource with neither uri: nor template:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+resources:
+  - name: Missing both
+    handler: { inline: { text: x } }
+tools: []
+`;
+  assert.throws(() => parseConfig(yamlText), /exactly one of uri or template/);
+});
+
+test("config rejects a template: resource with a watcher:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+resources:
+  - template: "queue://jobs/{status}"
+    name: Jobs
+    handler: { inline: { text: "[]" } }
+    watcher:
+      type: polling
+      interval_ms: 5000
+tools: []
+`;
+  assert.throws(() => parseConfig(yamlText), /template.*watcher/i);
+});
+
+test("config allows mixed static and template resources", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+resources:
+  - uri: "config://jig/hello"
+    name: Hello
+    handler: { inline: { text: "hi" } }
+  - template: "queue://jobs/{status}"
+    name: Jobs by status
+    handler: { inline: { text: "[]" } }
+tools: []
+`;
+  const cfg = parseConfig(yamlText);
+  assert.equal(cfg.resources!.length, 2);
+  assert.equal(cfg.resources![0]!.uri, "config://jig/hello");
+  assert.equal(cfg.resources![1]!.template, "queue://jobs/{status}");
 });
