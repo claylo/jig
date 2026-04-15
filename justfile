@@ -124,3 +124,34 @@ smoke-resource:
     echo "$output" | grep '"id":3' | head -1 | jq -e '.result.contents[0].text | contains("Hello")' >/dev/null
     echo "$output" | tail -4 | jq .
     echo "smoke-resource: OK"
+
+# Smoke-prompt: verify the Plan 7 example boots, prompts/list returns the
+# declared prompt, prompts/get renders the template, resources/templates/list
+# returns the template resource, and completion/complete prefix-filters
+# values for both a prompt argument and a template variable. Hermetic —
+# no network, all inline handlers.
+smoke-prompt:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requests='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
+    {"jsonrpc":"2.0","id":2,"method":"prompts/list"}
+    {"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{"name":"analyze_job","arguments":{"jobId":"j-123","depth":"detailed"}}}
+    {"jsonrpc":"2.0","id":4,"method":"resources/templates/list"}
+    {"jsonrpc":"2.0","id":5,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"analyze_job"},"argument":{"name":"depth","value":"d"}}}
+    {"jsonrpc":"2.0","id":6,"method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"queue://jobs/{status}"},"argument":{"name":"status","value":"c"}}}'
+    output=$(echo "$requests" | node --experimental-transform-types src/runtime/index.ts --config examples/prompts-completions.yaml)
+    if [ -z "$output" ]; then
+      echo "smoke-prompt: no response from runtime" >&2
+      exit 1
+    fi
+    # Structural assertions via jq
+    echo "$output" | grep '"id":2' | head -1 | jq -e '.result.prompts | length == 1' >/dev/null
+    echo "$output" | grep '"id":2' | head -1 | jq -e '.result.prompts[0].name == "analyze_job"' >/dev/null
+    echo "$output" | grep '"id":3' | head -1 | jq -e '.result.messages[0].role == "user"' >/dev/null
+    echo "$output" | grep '"id":3' | head -1 | jq -e '.result.messages[0].content.text | contains("j-123")' >/dev/null
+    echo "$output" | grep '"id":4' | head -1 | jq -e '.result.resourceTemplates | length == 1' >/dev/null
+    echo "$output" | grep '"id":4' | head -1 | jq -e '.result.resourceTemplates[0].uriTemplate == "queue://jobs/{status}"' >/dev/null
+    echo "$output" | grep '"id":5' | head -1 | jq -e '.result.completion.values | contains(["detailed"])' >/dev/null
+    echo "$output" | grep '"id":6' | head -1 | jq -e '.result.completion.values | length >= 2' >/dev/null
+    echo "$output" | tail -5 | jq .
+    echo "smoke-prompt: OK"

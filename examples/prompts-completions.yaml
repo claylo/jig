@@ -1,0 +1,70 @@
+# A Plan 7 example exercising prompts + completions + URI-templated resources.
+# Demonstrates:
+#   - prompts: block with named arguments and a template
+#   - resources: block with both a static URI and a template: URI
+#   - completions: block binding value lists to a prompt argument
+#     and a template variable
+#
+# Run with `just smoke-prompt`. Hermetic — no network, no filesystem
+# writes. All handlers are inline.
+#
+# NOTE: completion/complete prefix matching is case-insensitive. Sending
+# argument.value: "S" or "s" both match "summary".
+#
+# NOTE: resources/templates/list returns template resources only; they
+# do NOT appear on resources/list (list: undefined is passed to
+# ResourceTemplate at registration time).
+
+server:
+  name: jig-plan7-example
+  version: "1.0.0"
+  description: |
+    Demonstrates Plan 7: prompts block, URI-template resources,
+    and completions for both surfaces.
+
+resources:
+  - uri: config://jig/hello
+    name: Hello
+    description: A static greeting.
+    mimeType: text/plain
+    handler:
+      inline:
+        text: "Hello from the Plan 7 example."
+
+  - template: "queue://jobs/{status}"
+    name: Jobs by status
+    description: Jobs filtered by state. Variable completion via completions:.
+    mimeType: application/json
+    handler:
+      inline:
+        text: "[]"
+
+prompts:
+  - name: analyze_job
+    description: Produce an analysis prompt for a completed job
+    arguments:
+      - name: jobId
+        description: The job ID to analyze
+        required: true
+      - name: depth
+        description: "Analysis depth: summary | detailed | verbose"
+        required: false
+    template: |
+      Analyze job {{jobId}}.
+      Depth: {{depth}}.
+      Use the queue://jobs/{status} resource to look up related jobs.
+
+completions:
+  prompts:
+    analyze_job:
+      depth: [summary, detailed, verbose]
+  resources:
+    "queue://jobs/{status}":
+      status: [pending, active, completed, failed, cancelled]
+
+tools:
+  - name: ping
+    description: Simple tool so tools/list returns at least one entry.
+    handler:
+      inline:
+        text: pong
