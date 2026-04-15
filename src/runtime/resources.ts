@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import type { ResourceSpec, ResourcesConfig, WatcherSpec, Handler } from "./config.ts";
-import type { JigServerHandle, RegisteredResourceHandle } from "./server.ts";
+import type { JigServerHandle, RegisteredResourceHandle, SubscriptionTracker } from "./server.ts";
 import { invoke, type InvokeContext } from "./handlers/index.ts";
 
 /**
@@ -200,4 +201,96 @@ export function registerResources(
     handles.push(handle);
   }
   return handles;
+}
+
+/**
+ * Disposer returned per watcher. v1 collects these but never invokes;
+ * process exit cleans up setInterval / fs.watch handles.
+ */
+export type WatcherDisposer = () => void;
+
+/**
+ * Start every watcher declared in the config. Polling watchers
+ * re-invoke the handler on an interval and hash the result; file
+ * watchers (Phase 4) subscribe to fs.watch events on a path. Both
+ * emit resources/updated only when the URI is subscribed.
+ *
+ * Watcher failures log to stderr and skip the emit; the server does not
+ * crash. A handler whose upstream is transiently flaking must not take
+ * down an otherwise-running session.
+ */
+export function startWatchers(
+  resources: ResourcesConfig,
+  server: JigServerHandle,
+  tracker: SubscriptionTracker,
+  ctx: InvokeContext,
+): WatcherDisposer[] {
+  const disposers: WatcherDisposer[] = [];
+  for (const spec of resources) {
+    if (!spec.watcher) continue;
+    if (spec.watcher.type === "polling") {
+      disposers.push(startPollingWatcher(spec, spec.watcher, server, tracker, ctx));
+    }
+    // file watcher lands in Phase 4
+  }
+  return disposers;
+}
+
+function startPollingWatcher(
+  resource: ResourceSpec,
+  watcher: Extract<WatcherSpec, { type: "polling" }>,
+  server: JigServerHandle,
+  tracker: SubscriptionTracker,
+  ctx: InvokeContext,
+): WatcherDisposer {
+  const detection = watcher.change_detection ?? "hash";
+  let lastHash: string | undefined;
+
+  const tick = async () => {
+    try {
+      const raw = await invoke(resource.handler, {}, ctx);
+      if (raw.isError) {
+        process.stderr.write(
+          `jig: watcher for "${resource.uri}" handler returned isError: ${raw.content[0]?.text ?? "<no text>"}\n`,
+        );
+        return;
+      }
+      const text = raw.content[0]?.text ?? "";
+      if (detection === "hash") {
+        const hash = createHash("sha256").update(text).digest("hex");
+        if (lastHash === undefined) {
+          // First tick — establish baseline, no emit.
+          lastHash = hash;
+          return;
+        }
+        if (hash === lastHash) return;
+        lastHash = hash;
+      }
+      // change_detection === "always" emits every tick; "hash" emits
+      // only when the hash differs. Either way, gate on subscription
+      // state.
+      if (tracker.isSubscribed(resource.uri)) {
+        await server.sendResourceUpdated(resource.uri);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `jig: watcher for "${resource.uri}" threw: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  };
+
+  const handle = setInterval(() => {
+    void tick();
+  }, watcher.interval_ms);
+  // Don't block process exit on the interval.
+  handle.unref();
+
+  // Fire an immediate tick so the baseline hash is captured before the
+  // first real interval elapses. Without it, a client that subscribes
+  // and mutates the underlying data inside the first interval window
+  // would never see an update (the tick-at-interval-1 establishes
+  // the baseline based on post-mutation content).
+  void tick();
+
+  return () => clearInterval(handle);
 }

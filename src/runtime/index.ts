@@ -2,7 +2,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
 import { createServer, type ToolHandler } from "./server.ts";
-import { registerResources } from "./resources.ts";
+import { registerResources, startWatchers } from "./resources.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
@@ -79,8 +79,14 @@ async function main(): Promise<void> {
     );
   }
 
+  // trackSubscriptions() advertises capabilities.resources.subscribe: true
+  // and wires the subscribe/unsubscribe request handlers via the low-level
+  // Server. Gate the whole resources path on config.resources so a tools-only
+  // config doesn't advertise a resources capability it can't back.
   if (config.resources) {
     registerResources(server, config.resources, ctx);
+    const tracker = server.trackSubscriptions();
+    startWatchers(config.resources, server, tracker, ctx);
   }
 
   await server.connect(createStdioTransport());
