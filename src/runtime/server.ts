@@ -215,6 +215,11 @@ export function createServer(
       if (spec.description !== undefined) metadata.description = spec.description;
       if (spec.mimeType !== undefined) metadata.mimeType = spec.mimeType;
       // SDK signature: registerResource(name, uriOrTemplate: string, config, readCallback)
+      // FOLLOWUP(plan6): `handler` already satisfies ReadResourceCallback — the
+      // intermediate variable adds no type safety. Pass `handler` directly here
+      // once a follow-up pass lands; unlike registerTool above, there is no
+      // SDK generic-inference workaround to preserve. Keep `ReadResourceCallback`
+      // type import if still needed for the ResourceHandler alias; drop if not.
       const readCallback: ReadResourceCallback = async (u) => handler(u);
       return server.registerResource(spec.name, uri, metadata, readCallback);
     },
