@@ -99,6 +99,15 @@ export interface RegisterResourceSpec {
   mimeType?: string;
 }
 
+/**
+ * Per-process subscription state. Single-client stdio transport =
+ * one Set<uri>. A future multi-client HTTP transport swaps this for a
+ * per-session Map.
+ */
+export interface SubscriptionTracker {
+  isSubscribed(uri: string): boolean;
+}
+
 /** Handler signature for a resource read. */
 export type ResourceHandler = (uri: URL) => Promise<ReadResourceResult>;
 
@@ -130,6 +139,23 @@ export interface JigServerHandle {
     spec: RegisterResourceSpec,
     handler: ResourceHandler,
   ): RegisteredResource;
+  /**
+   * Wire resources/subscribe + resources/unsubscribe request handlers
+   * on the underlying Server (McpServer's high-level class omits them)
+   * and declare capabilities.resources.subscribe: true. Returns a
+   * tracker so watchers can gate emit on subscription state.
+   *
+   * MUST be called before server.connect(). Call order: registerResource
+   * for all resources, then trackSubscriptions, then connect.
+   */
+  trackSubscriptions(): SubscriptionTracker;
+  /**
+   * Fire notifications/resources/updated for a URI. Watchers call this
+   * unconditionally — the subscription gate lives at the watcher layer
+   * (startWatchers), so callers only reach this path when
+   * tracker.isSubscribed(uri) === true.
+   */
+  sendResourceUpdated(uri: string): Promise<void>;
   /** Attach to a transport and begin serving. */
   connect(transport: Transport): Promise<void>;
 }
@@ -222,6 +248,33 @@ export function createServer(
       // type import if still needed for the ResourceHandler alias; drop if not.
       const readCallback: ReadResourceCallback = async (u) => handler(u);
       return server.registerResource(spec.name, uri, metadata, readCallback);
+    },
+    trackSubscriptions() {
+      const subscribed = new Set<string>();
+      // Reach into the low-level Server. The SDK's McpServer class
+      // exposes its underlying Server via the `server` property
+      // (dist/index.d.mts:502). Subscribe/unsubscribe are not wired by
+      // the high-level class, so we register them ourselves. The
+      // generic on setRequestHandler infers request shape from the
+      // method literal (RequestTypeMap["resources/subscribe"] etc.).
+      const lowLevel = server.server;
+      lowLevel.registerCapabilities({ resources: { subscribe: true } });
+      lowLevel.setRequestHandler("resources/subscribe", async (req) => {
+        subscribed.add(req.params.uri);
+        return {};
+      });
+      lowLevel.setRequestHandler("resources/unsubscribe", async (req) => {
+        subscribed.delete(req.params.uri);
+        return {};
+      });
+      return {
+        isSubscribed(uri: string) {
+          return subscribed.has(uri);
+        },
+      };
+    },
+    async sendResourceUpdated(uri) {
+      await server.server.sendResourceUpdated({ uri });
     },
     async connect(transport: Transport) {
       await server.connect(transport);

@@ -505,6 +505,135 @@ tools: []
   }
 });
 
+test("polling watcher emits resources/updated when content changes and client is subscribed", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-poll-"));
+  const statePath = join(dir, "state.txt");
+  writeFileSync(statePath, "one");
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan6-poll, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
+resources:
+  - uri: config://jig/state
+    name: State
+    handler:
+      exec: "cat ${statePath}"
+    watcher:
+      type: polling
+      interval_ms: 200
+tools: []
+`);
+  try {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const stdoutLines: string[] = [];
+    child.stdout.setEncoding("utf8");
+    let buf = "";
+    child.stdout.on("data", (chunk: string) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.trim()) stdoutLines.push(line);
+      }
+    });
+
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "0" },
+    } }) + "\n");
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "resources/subscribe", params: { uri: "config://jig/state" } }) + "\n");
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2'));
+
+    // Wait one polling interval so the hash-baseline is captured, then mutate.
+    await new Promise((r) => setTimeout(r, 300));
+    writeFileSync(statePath, "two");
+
+    // Give the watcher up to 2 more intervals to fire.
+    await waitForLine(stdoutLines, (l) => l.includes("notifications/resources/updated") && l.includes("config://jig/state"), 2_000);
+
+    child.stdin.end();
+    await new Promise((r) => child.on("close", r));
+
+    const updated = stdoutLines.find((l) => l.includes("notifications/resources/updated"));
+    assert.ok(updated, "expected a resources/updated notification");
+    const parsed = JSON.parse(updated!) as { method: string; params: { uri: string } };
+    assert.equal(parsed.method, "notifications/resources/updated");
+    assert.equal(parsed.params.uri, "config://jig/state");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+async function waitForLine(lines: string[], pred: (l: string) => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (lines.some(pred)) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`timed out waiting for line matching predicate. Got:\n${lines.join("\n")}`);
+}
+
+test("polling watcher does not emit when client is not subscribed", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan6-nosub-"));
+  const statePath = join(dir, "state.txt");
+  writeFileSync(statePath, "one");
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan6-nosub, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
+resources:
+  - uri: config://jig/state
+    name: State
+    handler:
+      exec: "cat ${statePath}"
+    watcher:
+      type: polling
+      interval_ms: 150
+tools: []
+`);
+  try {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const stdoutLines: string[] = [];
+    let buf = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.trim()) stdoutLines.push(line);
+      }
+    });
+
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "0" },
+    } }) + "\n");
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+
+    // No subscribe! Just mutate and wait.
+    await new Promise((r) => setTimeout(r, 200));
+    writeFileSync(statePath, "two");
+    await new Promise((r) => setTimeout(r, 600));
+
+    child.stdin.end();
+    await new Promise((r) => child.on("close", r));
+
+    const updated = stdoutLines.find((l) => l.includes("notifications/resources/updated"));
+    assert.equal(updated, undefined, "no update notification should fire without a subscription");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 import { createServer as createHttpServerInt } from "node:http";
 import type { AddressInfo as AddressInfoInt } from "node:net";
 
