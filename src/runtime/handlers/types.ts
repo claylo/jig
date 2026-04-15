@@ -20,8 +20,7 @@ export interface ToolCallResult {
  *
  * connections: compiled connection definitions keyed by name.
  * probe: resolved probe values from the boot sequence, keyed by probe
- *   name. Empty {} when no probes are configured. Phase 4 plumbs the
- *   resolver output here; Phase 3 seeds this with {}.
+ *   name. Empty {} when no probes are configured.
  */
 export interface InvokeContext {
   connections: Record<string, CompiledConnection>;

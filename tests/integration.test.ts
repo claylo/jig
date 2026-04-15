@@ -341,6 +341,56 @@ tools: []
   }
 });
 
+test(
+  "probe value bakes into tool description at registration time",
+  { timeout: 15_000 },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jig-plan5-int-"));
+    const configPath = join(dir, "jig.yaml");
+    writeFileSync(
+      configPath,
+      `server:
+  name: plan5-int
+  version: "0.0.1"
+probes:
+  marker:
+    exec: "echo plan5-marker-value"
+tools:
+  - name: t1
+    description: "Marker is {{probe.marker}}"
+    handler: { inline: { text: ok } }
+`,
+    );
+    try {
+      const responses = await sendRpc(
+        join(process.cwd(), "src/runtime/index.ts"),
+        configPath,
+        [
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              clientInfo: { name: "t", version: "0" },
+            },
+          },
+          { jsonrpc: "2.0", id: 2, method: "tools/list" },
+        ],
+      );
+      const list = responses.find((r) => r.id === 2)!.result as {
+        tools: { name: string; description: string }[];
+      };
+      const t1 = list.tools.find((t) => t.name === "t1")!;
+      // exec strips trailing newline; the marker should be a clean substring.
+      assert.match(t1.description, /Marker is plan5-marker-value/);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  },
+);
+
 import { createServer as createHttpServerInt } from "node:http";
 import type { AddressInfo as AddressInfoInt } from "node:net";
 
