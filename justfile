@@ -77,3 +77,20 @@ smoke-http:
       exit 1
     fi
     echo "$output" | tail -1 | jq .
+
+# Smoke-probe: verify the Plan 5 example boots, both probes resolve,
+# the tool description bakes in {{probe.git_sha}} and
+# {{probe.current_user}}, and the transform wraps the help action's
+# inline text. Hermetic — exec probes only, no network round-trip.
+smoke-probe:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requests='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
+    {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+    {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"example","arguments":{"action":"help"}}}'
+    output=$(echo "$requests" | node --experimental-transform-types src/runtime/index.ts --config examples/probes.yaml)
+    if [ -z "$output" ]; then
+      echo "smoke-probe: no response from runtime" >&2
+      exit 1
+    fi
+    echo "$output" | tail -2 | jq .
