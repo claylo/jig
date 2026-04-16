@@ -580,3 +580,85 @@ test("interpreter fails the task when no transition matches and state has no res
   const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
   assert.match(r.content[0]!.text, /no transition matched/i);
 });
+
+// ─── Cross-ref tests ──────────────────────────────────────────────────
+
+test("config rejects a workflow handler on a tool without execution.taskSupport", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: x } }
+tools:
+  - name: bad
+    description: x
+    handler:
+      workflow: { ref: w }
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /tools\[bad\].*workflow handler.*requires execution\.taskSupport/i,
+  );
+});
+
+test("config rejects a task tool with a non-workflow handler", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: bad
+    description: x
+    execution:
+      taskSupport: required
+    handler:
+      inline: { text: x }
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /tools\[bad\].*task tool.*workflow handler/i,
+  );
+});
+
+test("config rejects a workflow.ref that doesn't resolve", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: x } }
+tools:
+  - name: bad
+    description: x
+    execution:
+      taskSupport: required
+    handler:
+      workflow: { ref: "no_such_workflow" }
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /tools\[bad\]\.handler\.workflow\.ref "no_such_workflow" not found in tasks:/,
+  );
+});
+
+test("config accepts a properly wired task tool", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: x } }
+tools:
+  - name: ok
+    description: x
+    execution:
+      taskSupport: required
+    handler:
+      workflow: { ref: w }
+`;
+  const cfg = parseConfig(yamlText);
+  assert.equal(cfg.tools[0]!.execution?.taskSupport, "required");
+  assert.ok("workflow" in cfg.tools[0]!.handler);
+});

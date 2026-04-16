@@ -319,7 +319,40 @@ export function parseConfig(yamlText: string): JigConfig {
   if (prompts !== undefined) result.prompts = prompts;
   if (completions !== undefined) result.completions = completions;
   if (tasks !== undefined) result.tasks = tasks;
+  crossRefTasks(tools, tasks);
   return result;
+}
+
+/**
+ * After all blocks are validated, enforce the cross-block invariants:
+ *   - every tool with execution.taskSupport must have a workflow: handler
+ *   - every tool with a workflow: handler must have execution.taskSupport
+ *   - every workflow.ref must resolve to a declared task workflow
+ */
+function crossRefTasks(tools: ToolDefinition[], tasks: TasksConfig | undefined): void {
+  for (const tool of tools) {
+    const isTaskTool = tool.execution !== undefined;
+    const isWorkflowHandler = "workflow" in tool.handler;
+
+    if (isWorkflowHandler && !isTaskTool) {
+      throw new Error(
+        `config: tools[${tool.name}]: workflow handler requires execution.taskSupport (declare execution: { taskSupport: required } or change the handler)`,
+      );
+    }
+    if (isTaskTool && !isWorkflowHandler) {
+      throw new Error(
+        `config: tools[${tool.name}]: task tool (execution.taskSupport set) requires a workflow handler in v1 (handler: { workflow: { ref: <task_name> } })`,
+      );
+    }
+    if (isWorkflowHandler) {
+      const ref = (tool.handler as WorkflowHandler).workflow.ref;
+      if (!tasks || !(ref in tasks)) {
+        throw new Error(
+          `config: tools[${tool.name}].handler.workflow.ref "${ref}" not found in tasks:`,
+        );
+      }
+    }
+  }
 }
 
 function validateServer(v: unknown): ServerMetadata {

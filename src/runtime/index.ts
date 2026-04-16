@@ -1,11 +1,12 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
-import { createServer, type ToolHandler } from "./server.ts";
+import { createServer, type CallToolResult, type ToolHandler } from "./server.ts";
 import { registerResources, startWatchers } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
+import { interpretWorkflow } from "./tasks.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
 import { configureAccess, isHostAllowed } from "./util/access.ts";
 import { applyTransform } from "./util/transform.ts";
@@ -60,10 +61,20 @@ async function main(): Promise<void> {
 
   const ctx = { connections: compiled, probe };
 
-  // Each tool's handler gets routed through the central invoke(). That
-  // is what lets a dispatch tool reach exec, inline, or nested dispatch
-  // without index.ts knowing the handler types.
+  // Partition tools by execution.taskSupport. Plain tools route through
+  // registerTool with the central invoke(). Task tools route through
+  // registerToolTask, where createTask spawns interpretWorkflow on the
+  // referenced state-machine workflow asynchronously and pushes status
+  // updates / a terminal result to the request-scoped task store.
   for (const tool of config.tools) {
+    if (tool.execution !== undefined) {
+      registerTaskTool(tool);
+    } else {
+      registerPlainTool(tool);
+    }
+  }
+
+  function registerPlainTool(tool: typeof config.tools[number]): void {
     const handler: ToolHandler = async (args: unknown) => {
       const normalized = normalizeArgs(args);
       const raw = await invoke(tool.handler, normalized, ctx);
@@ -77,6 +88,63 @@ async function main(): Promise<void> {
         inputSchema: toolToInputSchema(tool),
       },
       handler,
+    );
+  }
+
+  function registerTaskTool(tool: typeof config.tools[number]): void {
+    // Cross-ref check at parseConfig already guarantees the handler is
+    // workflow: and the ref resolves; narrow with a runtime assertion
+    // so the type system follows.
+    if (!("workflow" in tool.handler)) {
+      throw new Error(
+        `boot: task tool "${tool.name}" reached registerTaskTool without a workflow handler (parseConfig cross-ref should have caught this)`,
+      );
+    }
+    const workflowRef = tool.handler.workflow.ref;
+    const ttl_ms = tool.handler.workflow.ttl_ms ?? 300_000;
+    const workflow = config.tasks?.[workflowRef];
+    if (!workflow) {
+      throw new Error(
+        `boot: workflow "${workflowRef}" not declared in tasks: (parseConfig cross-ref should have caught this)`,
+      );
+    }
+    server.registerToolTask(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: toolToInputSchema(tool),
+        taskSupport: tool.execution!.taskSupport,
+      },
+      {
+        async createTask(args, store) {
+          const task = await store.createTask({ ttl: ttl_ms });
+          // Fire-and-forget: interpretWorkflow walks the state machine,
+          // pushes status updates, and stores the terminal result. Errors
+          // inside the interpreter become failed task results — they
+          // never bubble out of this createTask callback.
+          void interpretWorkflow({
+            workflow,
+            args,
+            ctx,
+            store,
+            taskId: task.taskId,
+            invoke,
+          });
+          return { task };
+        },
+        async getTask(taskId, store) {
+          const t = await store.getTask(taskId);
+          if (!t) {
+            throw new Error(`tasks/get: task "${taskId}" not found`);
+          }
+          return t;
+        },
+        async getTaskResult(taskId, store) {
+          // The store returns the broader Result type; the interpreter only
+          // ever stores CallToolResult-shaped objects. Cast at the boundary.
+          return (await store.getTaskResult(taskId)) as CallToolResult;
+        },
+      },
     );
   }
 
