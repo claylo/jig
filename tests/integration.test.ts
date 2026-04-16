@@ -1939,3 +1939,172 @@ tools:
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Phase 8: End-to-end tests against the ACTUAL example YAMLs
+
+test("plan 8 e2e against examples/tasks.yaml: validating → enriching → notifying → completed", { timeout: 15_000 }, async () => {
+  const cfgPath = "examples/tasks.yaml";
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", () => {});
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tasks: { requests: { tools: { call: true } } } },
+      clientInfo: { name: "e2e", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "process_job",
+      arguments: { jobId: "j-99" },
+      task: { ttl: 60_000 },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const taskId = JSON.parse(callLine).result.task.taskId as string;
+    assert.ok(taskId, "tools/call returned a taskId");
+
+    let status = "working";
+    let pollId = 3;
+    const start = Date.now();
+    while (status === "working" && Date.now() - start < 5_000) {
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId } });
+      const idMarker = `"id":${pollId}`;
+      await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+      const getLine = stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!;
+      status = JSON.parse(getLine).result.status;
+      pollId++;
+      if (status === "working") await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(status, "completed", "task reached completed status");
+
+    send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId } });
+    const idMarker = `"id":${pollId}`;
+    await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+    const resLine = stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!;
+    const finalText = JSON.parse(resLine).result.content[0].text as string;
+    assert.match(finalText, /Job j-99 processed/);
+    assert.match(finalText, /Notification posted to: #ops/);
+  } finally {
+    child.kill();
+  }
+});
+
+test("plan 8 e2e against examples/tasks-one-tool.yaml: dispatcher fusion (help → synthetic, run → workflow)", { timeout: 15_000 }, async () => {
+  const cfgPath = "examples/tasks-one-tool.yaml";
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", () => {});
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tasks: { requests: { tools: { call: true } } } },
+      clientInfo: { name: "e2e-onetool", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // tools/list shows ONE tool ("jobs") — single-tool spirit preserved
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const listLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const tools = JSON.parse(listLine).result.tools as Array<{ name: string }>;
+    assert.equal(tools.length, 1, "single-tool dispatcher exposes exactly one MCP tool");
+    assert.equal(tools[0]!.name, "jobs");
+
+    // action=help (synthetic one-step task)
+    send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: {
+      name: "jobs",
+      arguments: { action: "help" },
+      task: { ttl: 60_000 },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":3') && l.includes('"result"'));
+    const helpCallLine = stdoutLines.find((l) => l.includes('"id":3') && l.includes('"result"'))!;
+    const helpTaskId = JSON.parse(helpCallLine).result.task.taskId as string;
+    assert.ok(helpTaskId);
+
+    await new Promise((r) => setTimeout(r, 50));
+    send({ jsonrpc: "2.0", id: 4, method: "tasks/get", params: { taskId: helpTaskId } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":4') && l.includes('"result"'));
+    const helpStatus = JSON.parse(stdoutLines.find((l) => l.includes('"id":4') && l.includes('"result"'))!).result.status;
+    assert.equal(helpStatus, "completed", "help (synthetic) completes immediately");
+
+    send({ jsonrpc: "2.0", id: 5, method: "tasks/result", params: { taskId: helpTaskId } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":5') && l.includes('"result"'));
+    const helpText = JSON.parse(stdoutLines.find((l) => l.includes('"id":5') && l.includes('"result"'))!).result.content[0].text as string;
+    assert.match(helpText, /jobs management/);
+
+    // action=run (workflow case)
+    send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: {
+      name: "jobs",
+      arguments: { action: "run", jobId: "j-77" },
+      task: { ttl: 60_000 },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":6') && l.includes('"result"'));
+    const runCallLine = stdoutLines.find((l) => l.includes('"id":6') && l.includes('"result"'))!;
+    const runTaskId = JSON.parse(runCallLine).result.task.taskId as string;
+    assert.ok(runTaskId);
+
+    let runStatus = "working";
+    let pollId = 7;
+    const start = Date.now();
+    while (runStatus === "working" && Date.now() - start < 5_000) {
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId: runTaskId } });
+      const idMarker = `"id":${pollId}`;
+      await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+      runStatus = JSON.parse(stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!).result.status;
+      pollId++;
+      if (runStatus === "working") await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(runStatus, "completed");
+
+    send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId: runTaskId } });
+    const idMarker = `"id":${pollId}`;
+    await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+    const runText = JSON.parse(stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!).result.content[0].text as string;
+    assert.match(runText, /Job j-77 processed/);
+    assert.match(runText, /Notification posted to: #ops/);
+  } finally {
+    child.kill();
+  }
+});
