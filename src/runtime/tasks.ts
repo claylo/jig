@@ -5,7 +5,11 @@ import type {
   TransitionSpec,
   WorkflowSpec,
 } from "./config.ts";
+import type { CallToolResult } from "./server.ts";
+import type { InvokeContext, ToolCallResult } from "./handlers/types.ts";
 import type { JsonLogicRule } from "./util/jsonlogic.ts";
+import { evaluate as evalJsonLogic } from "./util/jsonlogic.ts";
+import { render } from "./util/template.ts";
 
 const STATE_KNOWN = new Set([
   "mcpStatus",
@@ -313,4 +317,205 @@ function validateTransition(
     out.when = t["when"] as JsonLogicRule;
   }
   return out;
+}
+
+// ─── Interpreter ──────────────────────────────────────────────────────
+
+/**
+ * Minimal task-store surface the interpreter needs. Mirrors a subset of
+ * the SDK's RequestTaskStore but exposed as a plain interface so unit
+ * tests can substitute a tracking double without touching the SDK.
+ */
+export interface InterpreterTaskStore {
+  storeTaskResult(
+    taskId: string,
+    status: "completed" | "failed",
+    result: CallToolResult,
+  ): Promise<void>;
+  updateTaskStatus(
+    taskId: string,
+    status: "working" | "completed" | "failed",
+    statusMessage?: string,
+  ): Promise<void>;
+}
+
+export interface InterpretWorkflowOptions {
+  workflow: WorkflowSpec;
+  args: Record<string, unknown>;
+  ctx: InvokeContext;
+  store: InterpreterTaskStore;
+  taskId: string;
+  invoke: (
+    handler: Handler,
+    args: Record<string, unknown>,
+    ctx: InvokeContext,
+  ) => Promise<ToolCallResult>;
+}
+
+/**
+ * Drive a state-machine workflow to a terminal result.
+ *
+ * Algorithm:
+ *   1. start = workflow.initial
+ *   2. for each state:
+ *      a. updateTaskStatus(taskId, mcpStatus, statusMessage)
+ *      b. if state has actions, run each in declared order via invoke();
+ *         the result of the LAST action becomes workflowCtx.result
+ *         (parsed as JSON if the text content parses, else raw text)
+ *      c. if any action returns isError: true OR throws, transition
+ *         immediately to a synthesized failed terminal with the error
+ *         text as result, then return
+ *      d. if state is terminal, render result.text via Mustache against
+ *         { input, result, probe }, storeTaskResult, then return
+ *      e. evaluate state.on transitions in declaration order; pick the
+ *         first whose `when` evaluates truthy (or has no `when`); set
+ *         current = transition.target; loop
+ *      f. if no transition matches, storeTaskResult with failed status
+ *         and an "interpreter: no transition matched" error message;
+ *         return
+ */
+export async function interpretWorkflow(
+  opts: InterpretWorkflowOptions,
+): Promise<void> {
+  const { workflow, args, ctx, store, taskId, invoke } = opts;
+  const workflowCtx: { input: Record<string, unknown>; result: unknown; probe: Record<string, unknown> } = {
+    input: args,
+    result: undefined,
+    probe: ctx.probe,
+  };
+
+  let current = workflow.initial;
+  const MAX_STEPS = 1024;
+  let steps = 0;
+
+  while (steps++ < MAX_STEPS) {
+    const state = workflow.states[current];
+    if (!state) {
+      await safeFail(
+        store,
+        taskId,
+        `interpreter: state "${current}" not declared (this is a jig bug — should have been caught at parse time)`,
+      );
+      return;
+    }
+
+    // Push status update; do not await failure-blocking.
+    void store
+      .updateTaskStatus(taskId, state.mcpStatus, state.statusMessage)
+      .catch(() => {
+        // Swallow — status push is best-effort.
+      });
+
+    // Run actions in sequence; capture each result; the last one wins.
+    if (state.actions !== undefined) {
+      let actionResult: ToolCallResult | undefined;
+      for (let i = 0; i < state.actions.length; i++) {
+        try {
+          actionResult = await invoke(state.actions[i]!, args, ctx);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await safeFail(
+            store,
+            taskId,
+            `action ${i} (state "${current}") threw: ${message}`,
+          );
+          return;
+        }
+        if (actionResult.isError) {
+          const text = actionResult.content[0]?.text ?? "<no error text>";
+          await safeFail(
+            store,
+            taskId,
+            `action ${i} (state "${current}") failed: ${text}`,
+          );
+          return;
+        }
+      }
+      if (actionResult !== undefined) {
+        workflowCtx.result = parseActionResult(actionResult);
+      }
+    }
+
+    // Terminal state? Render and store.
+    if (state.result !== undefined) {
+      const rendered = render(state.result.text, workflowCtx);
+      const storeStatus: "completed" | "failed" =
+        state.mcpStatus === "failed" ? "failed" : "completed";
+      const finalResult: CallToolResult = {
+        content: [{ type: "text", text: rendered }],
+        ...(storeStatus === "failed" && { isError: true }),
+      };
+      await store.storeTaskResult(taskId, storeStatus, finalResult);
+      return;
+    }
+
+    // Pick the first matching transition.
+    if (state.on === undefined || state.on.length === 0) {
+      await safeFail(
+        store,
+        taskId,
+        `interpreter: state "${current}" is non-terminal but has no on: transitions`,
+      );
+      return;
+    }
+
+    const next = await pickTransition(state.on, workflowCtx);
+    if (next === undefined) {
+      await safeFail(
+        store,
+        taskId,
+        `interpreter: no transition matched in state "${current}" — workflow stalled`,
+      );
+      return;
+    }
+    current = next.target;
+  }
+
+  await safeFail(
+    store,
+    taskId,
+    `interpreter: max steps (${MAX_STEPS}) exceeded — likely a transition loop`,
+  );
+}
+
+async function pickTransition(
+  transitions: TransitionSpec[],
+  workflowCtx: Record<string, unknown>,
+): Promise<TransitionSpec | undefined> {
+  for (const t of transitions) {
+    if (t.when === undefined) return t;
+    let matched: unknown;
+    try {
+      matched = await evalJsonLogic(t.when as JsonLogicRule, workflowCtx);
+    } catch {
+      continue;
+    }
+    if (matched) return t;
+  }
+  return undefined;
+}
+
+function parseActionResult(result: ToolCallResult): unknown {
+  const text = result.content[0]?.text;
+  if (text === undefined || text === "") return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+async function safeFail(
+  store: InterpreterTaskStore,
+  taskId: string,
+  message: string,
+): Promise<void> {
+  try {
+    await store.storeTaskResult(taskId, "failed", {
+      content: [{ type: "text", text: message }],
+      isError: true,
+    });
+  } catch {
+    // Nothing left to do; the store is the only output channel.
+  }
 }
