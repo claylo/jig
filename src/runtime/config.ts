@@ -324,31 +324,71 @@ export function parseConfig(yamlText: string): JigConfig {
 }
 
 /**
+ * Walk a handler tree and yield every workflow.ref it contains.
+ * Plan 8 supports two shapes:
+ *   - outer handler is workflow: → one ref
+ *   - outer handler is dispatch: → zero or more refs from cases[*].handler
+ *     (recursively in case any future plan adds nested dispatch)
+ *
+ * Other handler types (inline/exec/compute/http/graphql) yield nothing.
+ */
+function* findWorkflowRefs(handler: Handler): Generator<{ ref: string; path: string }> {
+  if ("workflow" in handler) {
+    yield { ref: handler.workflow.ref, path: "handler.workflow" };
+    return;
+  }
+  if ("dispatch" in handler) {
+    for (const [caseName, caseSpec] of Object.entries(handler.dispatch.cases)) {
+      for (const inner of findWorkflowRefs(caseSpec.handler)) {
+        yield {
+          ref: inner.ref,
+          path: `handler.dispatch.cases.${caseName}.${inner.path}`,
+        };
+      }
+    }
+  }
+  // inline/exec/compute/http/graphql: no workflow refs
+}
+
+/**
  * After all blocks are validated, enforce the cross-block invariants:
- *   - every tool with execution.taskSupport must have a workflow: handler
- *   - every tool with a workflow: handler must have execution.taskSupport
+ *   - any tool containing a workflow ref (outer or nested in dispatch)
+ *     requires execution.taskSupport
  *   - every workflow.ref must resolve to a declared task workflow
+ *   - a task tool's outer handler must be workflow: or dispatch:
  */
 function crossRefTasks(tools: ToolDefinition[], tasks: TasksConfig | undefined): void {
   for (const tool of tools) {
     const isTaskTool = tool.execution !== undefined;
-    const isWorkflowHandler = "workflow" in tool.handler;
+    const refs = [...findWorkflowRefs(tool.handler)];
+    const hasAnyWorkflowRef = refs.length > 0;
 
-    if (isWorkflowHandler && !isTaskTool) {
+    // Rule: a tool that contains ANY workflow ref (outer OR nested in
+    // dispatch) requires execution.taskSupport.
+    if (hasAnyWorkflowRef && !isTaskTool) {
+      const refList = refs.map((r) => r.path).join(", ");
       throw new Error(
-        `config: tools[${tool.name}]: workflow handler requires execution.taskSupport (declare execution: { taskSupport: required } or change the handler)`,
+        `config: tools[${tool.name}]: workflow case present (${refList}) requires execution.taskSupport (declare execution: { taskSupport: required } or remove the workflow case)`,
       );
     }
-    if (isTaskTool && !isWorkflowHandler) {
-      throw new Error(
-        `config: tools[${tool.name}]: task tool (execution.taskSupport set) requires a workflow handler in v1 (handler: { workflow: { ref: <task_name> } })`,
-      );
-    }
-    if (isWorkflowHandler) {
-      const ref = (tool.handler as WorkflowHandler).workflow.ref;
+
+    // Rule: every workflow.ref must resolve.
+    for (const { ref, path } of refs) {
       if (!tasks || !(ref in tasks)) {
         throw new Error(
-          `config: tools[${tool.name}].handler.workflow.ref "${ref}" not found in tasks:`,
+          `config: tools[${tool.name}].${path}.ref "${ref}" not found in tasks:`,
+        );
+      }
+    }
+
+    // Rule: a task tool's outer handler must be either workflow: or
+    // dispatch:. Other handler types (inline/exec/compute/http/graphql
+    // at the OUTER level) cannot drive the task lifecycle in v1.
+    if (isTaskTool) {
+      const outerOk = "workflow" in tool.handler || "dispatch" in tool.handler;
+      if (!outerOk) {
+        throw new Error(
+          `config: tools[${tool.name}]: task tool (execution.taskSupport set) requires the outer handler to be workflow: or dispatch: (got ${Object.keys(tool.handler)[0]})`,
         );
       }
     }
