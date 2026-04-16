@@ -9,6 +9,7 @@ import { validateProbes } from "./probes.ts";
 import { validateResources } from "./resources.ts";
 import { validatePrompts } from "./prompts.ts";
 import { validateCompletions } from "./completions.ts";
+import { validateTasks } from "./tasks.ts";
 
 export type { SecurityConfig };
 
@@ -186,6 +187,46 @@ export interface CompletionsConfig {
   resources?: Record<string, Record<string, string[]>>;
 }
 
+/**
+ * One transition out of a state. Evaluated in declaration order; the first
+ * matching transition fires. A transition with no `when:` always matches.
+ *
+ * `event:` is reserved for forward compatibility (future external triggers).
+ * Plan 8 transitions all fire on action completion; `event:` is currently a
+ * documentation-only field.
+ */
+export interface TransitionSpec {
+  event?: string;
+  target: string;
+  when?: JsonLogicRule;
+}
+
+/**
+ * One state in a workflow. Two shapes:
+ *   - non-terminal (mcpStatus: "working") — declares actions: and on:;
+ *     MUST NOT declare result:
+ *   - terminal (mcpStatus: "completed" | "failed") — declares result:;
+ *     MUST NOT declare actions: or on:
+ *
+ * The validator enforces the shape at parse time so the interpreter can
+ * trust state.actions / state.on / state.result without re-checking.
+ */
+export interface StateSpec {
+  mcpStatus: "working" | "completed" | "failed";
+  statusMessage?: string;
+  actions?: Handler[];
+  on?: TransitionSpec[];
+  result?: { text: string };
+}
+
+export interface WorkflowSpec {
+  initial: string;
+  states: Record<string, StateSpec>;
+}
+
+/** Top-level tasks: block — workflow definitions keyed by name. */
+export type TasksConfig = Record<string, WorkflowSpec>;
+
 export type Handler =
   | InlineHandler
   | ExecHandler
@@ -231,6 +272,8 @@ export interface JigConfig {
   prompts?: PromptsConfig;
   /** Autocomplete value lists for prompt arguments and template variables. */
   completions?: CompletionsConfig;
+  /** State-machine workflows referenced by workflow: handlers. */
+  tasks?: TasksConfig;
 }
 
 export function parseConfig(yamlText: string): JigConfig {
@@ -249,6 +292,7 @@ export function parseConfig(yamlText: string): JigConfig {
   );
   const prompts = validatePrompts(obj["prompts"]);
   const completions = validateCompletions(obj["completions"], prompts, resources);
+  const tasks = validateTasks(obj["tasks"], (h, owner) => validateHandlerPublic(h, owner));
 
   const result: JigConfig = { server, tools };
   if (connections !== undefined) result.connections = connections;
@@ -256,6 +300,7 @@ export function parseConfig(yamlText: string): JigConfig {
   if (resources !== undefined) result.resources = resources;
   if (prompts !== undefined) result.prompts = prompts;
   if (completions !== undefined) result.completions = completions;
+  if (tasks !== undefined) result.tasks = tasks;
   return result;
 }
 
