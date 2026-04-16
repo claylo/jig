@@ -845,6 +845,222 @@ test("interpreter fails the task when no transition matches and state has no res
   assert.match(r.content[0]!.text, /no transition matched/i);
 });
 
+test("interpreter handles input_required: elicit → accept → transition", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "ask",
+        states: {
+          ask: {
+            mcpStatus: "input_required",
+            statusMessage: "Need approval",
+            elicitation: {
+              message: "Approve?",
+              schema: {
+                approved: { type: "boolean" },
+              },
+            },
+            on: [
+              { when: { "var": "elicitation.approved" }, target: "done" },
+              { target: "rejected" },
+            ],
+          },
+          done: { mcpStatus: "completed", result: { text: "approved" } },
+          rejected: { mcpStatus: "failed", result: { text: "rejected" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  const elicitStub = async () => ({
+    action: "accept" as const,
+    content: { approved: true },
+  });
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+    elicit: elicitStub,
+  });
+  assert.ok(
+    tracker.statusUpdates.some((u) => u.status === "input_required"),
+    "input_required status pushed",
+  );
+  assert.equal(tracker.results[0]!.status, "completed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "approved");
+});
+
+test("interpreter handles input_required: elicit → decline → fallback transition", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "ask",
+        states: {
+          ask: {
+            mcpStatus: "input_required",
+            elicitation: {
+              message: "Approve?",
+              schema: { approved: { type: "boolean" } },
+            },
+            on: [
+              { when: { "var": "elicitation.approved" }, target: "done" },
+              { target: "rejected" },
+            ],
+          },
+          done: { mcpStatus: "completed", result: { text: "approved" } },
+          rejected: { mcpStatus: "failed", result: { text: "declined" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  const elicitStub = async () => ({
+    action: "decline" as const,
+  });
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+    elicit: elicitStub,
+  });
+  assert.equal(tracker.results[0]!.status, "failed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "declined");
+});
+
+test("interpreter safeFails when elicit throws", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "ask",
+        states: {
+          ask: {
+            mcpStatus: "input_required",
+            elicitation: {
+              message: "Approve?",
+              schema: { approved: { type: "boolean" } },
+            },
+            on: [{ target: "done" }],
+          },
+          done: { mcpStatus: "completed", result: { text: "ok" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  const elicitStub = async () => {
+    throw new Error("Client does not support elicitation");
+  };
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+    elicit: elicitStub,
+  });
+  assert.equal(tracker.results[0]!.status, "failed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }>; isError?: boolean };
+  assert.ok(r.isError);
+  assert.match(r.content[0]!.text, /elicitation failed|Client does not support/i);
+});
+
+test("interpreter exposes elicitation.action for explicit cancel routing", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "ask",
+        states: {
+          ask: {
+            mcpStatus: "input_required",
+            elicitation: {
+              message: "Approve?",
+              schema: { approved: { type: "boolean" } },
+            },
+            on: [
+              { when: { "==": [{ "var": "elicitation.action" }, "cancel"] }, target: "cancelled" },
+              { when: { "var": "elicitation.approved" }, target: "done" },
+              { target: "rejected" },
+            ],
+          },
+          done: { mcpStatus: "completed", result: { text: "approved" } },
+          rejected: { mcpStatus: "failed", result: { text: "rejected" } },
+          cancelled: { mcpStatus: "failed", result: { text: "user cancelled" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  const elicitStub = async () => ({
+    action: "cancel" as const,
+  });
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+    elicit: elicitStub,
+  });
+  assert.equal(tracker.results[0]!.status, "failed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "user cancelled");
+});
+
+test("interpreter renders elicitation fields in terminal result text", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "ask",
+        states: {
+          ask: {
+            mcpStatus: "input_required",
+            elicitation: {
+              message: "Name?",
+              schema: { name: { type: "string" } },
+            },
+            on: [{ target: "done" }],
+          },
+          done: {
+            mcpStatus: "completed",
+            result: { text: "Hello {{elicitation.name}}!" },
+          },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  const elicitStub = async () => ({
+    action: "accept" as const,
+    content: { name: "Clay" },
+  });
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+    elicit: elicitStub,
+  });
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "Hello Clay!");
+});
+
 // ─── Cross-ref tests ──────────────────────────────────────────────────
 
 test("config rejects a workflow handler on a tool without execution.taskSupport", () => {

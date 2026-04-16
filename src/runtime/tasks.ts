@@ -534,11 +534,17 @@ export interface InterpretWorkflowOptions {
 export async function interpretWorkflow(
   opts: InterpretWorkflowOptions,
 ): Promise<void> {
-  const { workflow, args, ctx, store, taskId, invoke } = opts;
-  const workflowCtx: { input: Record<string, unknown>; result: unknown; probe: Record<string, unknown> } = {
+  const { workflow, args, ctx, store, taskId, invoke, elicit } = opts;
+  const workflowCtx: {
+    input: Record<string, unknown>;
+    result: unknown;
+    probe: Record<string, unknown>;
+    elicitation: Record<string, unknown>;
+  } = {
     input: args,
     result: undefined,
     probe: ctx.probe,
+    elicitation: {},
   };
 
   let current = workflow.initial;
@@ -562,6 +568,31 @@ export async function interpretWorkflow(
       .catch(() => {
         // Swallow — status push is best-effort.
       });
+
+    // ── input_required: elicit and bind ──
+    if (state.mcpStatus === "input_required" && state.elicitation !== undefined) {
+      let elicitResult: ElicitResponse;
+      try {
+        elicitResult = await elicit({
+          message: state.elicitation.message,
+          requestedSchema: buildRequestedSchema(state.elicitation),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await safeFail(
+          store,
+          taskId,
+          `elicitation failed in state "${current}": ${message}`,
+        );
+        return;
+      }
+      // Bind response: action is always present; content fields spread in.
+      workflowCtx.elicitation = {
+        action: elicitResult.action,
+        ...(elicitResult.content ?? {}),
+      };
+      // Fall through to transition evaluation (no actions on input_required states).
+    }
 
     // Run actions in sequence; capture each result; the last one wins.
     if (state.actions !== undefined) {
@@ -650,6 +681,43 @@ async function pickTransition(
     if (matched) return t;
   }
   return undefined;
+}
+
+/**
+ * Build the SDK-shaped requestedSchema from a validated ElicitationSpec.
+ * Each field gets a `title` defaulting to the capitalized field name.
+ */
+function buildRequestedSchema(
+  spec: ElicitationSpec,
+): ElicitParams["requestedSchema"] {
+  const properties: Record<string, unknown> = {};
+  for (const [name, field] of Object.entries(spec.schema)) {
+    const prop: Record<string, unknown> = { type: field.type };
+    prop.title = field.title ?? name.charAt(0).toUpperCase() + name.slice(1);
+    if (field.description !== undefined) prop.description = field.description;
+    if (field.default !== undefined) prop.default = field.default;
+    // string-specific
+    if (field.enum !== undefined) prop.enum = field.enum;
+    if (field.enumNames !== undefined) prop.enumNames = field.enumNames;
+    if (field.oneOf !== undefined) prop.oneOf = field.oneOf;
+    if (field.format !== undefined) prop.format = field.format;
+    if (field.minLength !== undefined) prop.minLength = field.minLength;
+    if (field.maxLength !== undefined) prop.maxLength = field.maxLength;
+    // number/integer-specific
+    if (field.minimum !== undefined) prop.minimum = field.minimum;
+    if (field.maximum !== undefined) prop.maximum = field.maximum;
+    // array-specific
+    if (field.items !== undefined) prop.items = field.items;
+    if (field.minItems !== undefined) prop.minItems = field.minItems;
+    if (field.maxItems !== undefined) prop.maxItems = field.maxItems;
+    properties[name] = prop;
+  }
+  const schema: ElicitParams["requestedSchema"] = {
+    type: "object",
+    properties,
+  };
+  if (spec.required !== undefined) schema.required = spec.required;
+  return schema;
 }
 
 function parseActionResult(result: ToolCallResult): unknown {
