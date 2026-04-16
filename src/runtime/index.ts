@@ -1,13 +1,14 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
-import { createServer, type CallToolResult, type ToolHandler } from "./server.ts";
+import { createServer, type CallToolResult, type JigTaskHandler, type ToolHandler } from "./server.ts";
 import { registerResources, startWatchers } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { interpretWorkflow } from "./tasks.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
+import { resolveDispatchCase } from "./handlers/dispatch.ts";
 import { configureAccess, isHostAllowed } from "./util/access.ts";
 import { applyTransform } from "./util/transform.ts";
 import { compileConnections } from "./connections.ts";
@@ -92,22 +93,17 @@ async function main(): Promise<void> {
   }
 
   function registerTaskTool(tool: typeof config.tools[number]): void {
-    // Cross-ref check at parseConfig already guarantees the handler is
-    // workflow: and the ref resolves; narrow with a runtime assertion
-    // so the type system follows.
-    if (!("workflow" in tool.handler)) {
+    // Cross-ref check at parseConfig already guarantees the outer
+    // handler is workflow: OR dispatch:; Phase 7 fusion routes both.
+    const outerHandler = tool.handler;
+    const isOuterWorkflow = "workflow" in outerHandler;
+    const isOuterDispatch = "dispatch" in outerHandler;
+    if (!isOuterWorkflow && !isOuterDispatch) {
       throw new Error(
-        `boot: task tool "${tool.name}" reached registerTaskTool without a workflow handler (parseConfig cross-ref should have caught this)`,
+        `boot: task tool "${tool.name}" reached registerTaskTool with neither workflow: nor dispatch: outer handler (parseConfig cross-ref should have caught this)`,
       );
     }
-    const workflowRef = tool.handler.workflow.ref;
-    const ttl_ms = tool.handler.workflow.ttl_ms ?? 300_000;
-    const workflow = config.tasks?.[workflowRef];
-    if (!workflow) {
-      throw new Error(
-        `boot: workflow "${workflowRef}" not declared in tasks: (parseConfig cross-ref should have caught this)`,
-      );
-    }
+
     server.registerToolTask(
       tool.name,
       {
@@ -117,35 +113,94 @@ async function main(): Promise<void> {
       },
       {
         async createTask(args, store) {
-          const task = await store.createTask({ ttl: ttl_ms });
-          // Fire-and-forget: interpretWorkflow walks the state machine,
-          // pushes status updates, and stores the terminal result. Errors
-          // inside the interpreter become failed task results — they
-          // never bubble out of this createTask callback.
-          void interpretWorkflow({
-            workflow,
-            args,
-            ctx,
-            store,
-            taskId: task.taskId,
-            invoke,
-          });
+          // Two outer-handler shapes:
+          //   1. workflow: → kick off interpreter (Phase 6 simple case)
+          //   2. dispatch: → resolve case, then either workflow OR sync
+          if (isOuterWorkflow) {
+            return startWorkflowTask(
+              outerHandler.workflow.ref,
+              outerHandler.workflow.ttl_ms ?? 300_000,
+              args,
+              store,
+            );
+          }
+
+          // Dispatch outer handler — resolve the matched case.
+          const resolved = resolveDispatchCase(outerHandler, args);
+          if (!resolved.matched) {
+            // No case matched — return a synthetic immediately-failed task.
+            const task = await store.createTask({ ttl: 60_000 });
+            await store.storeTaskResult(task.taskId, "failed", {
+              content: [{ type: "text", text: resolved.reason }],
+              isError: true,
+            });
+            return { task };
+          }
+
+          // Matched case has its own handler. Branch on workflow: vs sync.
+          const caseHandler = resolved.case.handler;
+          if ("workflow" in caseHandler) {
+            return startWorkflowTask(
+              caseHandler.workflow.ref,
+              caseHandler.workflow.ttl_ms ?? 300_000,
+              args,
+              store,
+            );
+          }
+
+          // Sync case — invoke and store immediately as a one-step
+          // synthetic task. The SDK still gets a CreateTaskResult shape;
+          // the task is already terminal by the time tasks/get is called.
+          const task = await store.createTask({ ttl: 60_000 });
+          try {
+            const result = await invoke(caseHandler, args, ctx);
+            const status: "completed" | "failed" = result.isError ? "failed" : "completed";
+            await store.storeTaskResult(task.taskId, status, result);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await store.storeTaskResult(task.taskId, "failed", {
+              content: [{ type: "text", text: `dispatch case "${resolved.caseName}" threw: ${message}` }],
+              isError: true,
+            });
+          }
           return { task };
         },
         async getTask(taskId, store) {
           const t = await store.getTask(taskId);
-          if (!t) {
-            throw new Error(`tasks/get: task "${taskId}" not found`);
-          }
+          if (!t) throw new Error(`tasks/get: task "${taskId}" not found`);
           return t;
         },
         async getTaskResult(taskId, store) {
-          // The store returns the broader Result type; the interpreter only
-          // ever stores CallToolResult-shaped objects. Cast at the boundary.
           return (await store.getTaskResult(taskId)) as CallToolResult;
         },
       },
     );
+
+    // Helper closure: kicks off a workflow as a task. Shared between
+    // the outer-workflow case and the dispatch-case-routes-to-workflow case.
+    async function startWorkflowTask(
+      workflowRef: string,
+      ttl_ms: number,
+      args: Record<string, unknown>,
+      store: Parameters<JigTaskHandler["createTask"]>[1],
+    ) {
+      const workflow = config.tasks?.[workflowRef];
+      if (!workflow) {
+        throw new Error(
+          `boot: workflow "${workflowRef}" not declared in tasks: (parseConfig cross-ref should have caught this)`,
+        );
+      }
+      const task = await store.createTask({ ttl: ttl_ms });
+      void interpretWorkflow({
+        workflow,
+        args,
+        ctx,
+        store,
+        taskId: task.taskId,
+        invoke,
+      });
+      return { task };
+    }
   }
 
   // trackSubscriptions() advertises capabilities.resources.subscribe: true

@@ -1681,3 +1681,261 @@ tools:
       rmSync(dir, { recursive: true, force: true });
     }
 });
+
+// Phase 7: Dispatcher-task fusion integration tests
+
+test("dispatcher-task fusion: non-workflow case becomes a synthetic one-step task", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan8-fusion-help-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan8-fusion-help, version: "0.0.1" }
+tasks:
+  noop:
+    initial: done
+    states:
+      done: { mcpStatus: completed, result: { text: ok } }
+tools:
+  - name: jobs
+    description: "Dispatcher with one workflow case and one inline case"
+    input:
+      action: { type: string, required: true }
+    execution:
+      taskSupport: optional
+    handler:
+      dispatch:
+        on: action
+        cases:
+          help:
+            handler:
+              inline: { text: "help text here" }
+          run:
+            handler:
+              workflow: { ref: noop }
+`);
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tasks: { requests: { tools: { call: true } } } },
+      clientInfo: { name: "test", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "jobs",
+      arguments: { action: "help" },
+      task: { ttl: 60_000 },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const callResp = JSON.parse(callLine);
+    const result = callResp.result as { task?: { taskId: string; status: string } };
+    assert.ok(result.task, "non-workflow case still returns a CreateTaskResult");
+    assert.ok(result.task!.taskId);
+
+    // The synthetic one-step task should be completed almost immediately.
+    await new Promise((r) => setTimeout(r, 100));
+    send({ jsonrpc: "2.0", id: 3, method: "tasks/get", params: { taskId: result.task!.taskId } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":3') && l.includes('"result"'));
+    const getLine = stdoutLines.find((l) => l.includes('"id":3') && l.includes('"result"'))!;
+    const status = JSON.parse(getLine).result.status;
+    assert.equal(status, "completed", "synthetic one-step task completed");
+
+    send({ jsonrpc: "2.0", id: 4, method: "tasks/result", params: { taskId: result.task!.taskId } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":4') && l.includes('"result"'));
+    const resLine = stdoutLines.find((l) => l.includes('"id":4') && l.includes('"result"'))!;
+    const text = JSON.parse(resLine).result.content[0].text;
+    assert.equal(text, "help text here");
+  } finally {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher-task fusion: workflow case routes through the interpreter", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan8-fusion-run-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, [
+    "server: { name: plan8-fusion-run, version: '0.0.1' }",
+    "tasks:",
+    "  echo_workflow:",
+    "    initial: compute",
+    "    states:",
+    "      compute:",
+    "        mcpStatus: working",
+    "        actions:",
+    '          - inline:',
+    '              text: \'{"squared": 16}\'',
+    "        on:",
+    "          - target: done",
+    "      done:",
+    "        mcpStatus: completed",
+    "        result:",
+    '          text: "input.n={{input.n}} squared={{result.squared}}"',
+    "tools:",
+    "  - name: math",
+    '    description: "Dispatcher whose run case kicks off a workflow"',
+    "    input:",
+    "      action: { type: string, required: true }",
+    "      n: { type: integer }",
+    "    execution:",
+    "      taskSupport: optional",
+    "    handler:",
+    "      dispatch:",
+    "        on: action",
+    "        cases:",
+    "          run:",
+    "            requires: [n]",
+    "            handler:",
+    "              workflow: { ref: echo_workflow }",
+  ].join("\n"));
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  // Drain stderr so the child never blocks on a full pipe.
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", () => {});
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tasks: { requests: { tools: { call: true } } } },
+      clientInfo: { name: "fusion", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "math",
+      arguments: { action: "run", n: 4 },
+      task: { ttl: 60_000 },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const taskId = JSON.parse(callLine).result.task.taskId as string;
+    assert.ok(taskId);
+
+    let status = "working";
+    let pollId = 3;
+    const start = Date.now();
+    while (status === "working" && Date.now() - start < 5_000) {
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId } });
+      const idMarker = `"id":${pollId}`;
+      await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+      status = JSON.parse(stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!).result.status;
+      pollId++;
+      if (status === "working") await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(status, "completed");
+
+    send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId } });
+    const idMarker = `"id":${pollId}`;
+    await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+    const finalText = JSON.parse(stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!).result.content[0].text as string;
+    assert.equal(finalText, "input.n=4 squared=16");
+  } finally {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher-task fusion: all-sync dispatcher under taskSupport", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan8-fusion-allsync-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan8-fusion-allsync, version: "0.0.1" }
+tools:
+  - name: query
+    description: "All-sync dispatcher under taskSupport"
+    input:
+      action: { type: string, required: true }
+    execution:
+      taskSupport: optional
+    handler:
+      dispatch:
+        on: action
+        cases:
+          ping:
+            handler:
+              inline: { text: "pong" }
+`);
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tasks: { requests: { tools: { call: true } } } },
+      clientInfo: { name: "test", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "query",
+      arguments: { action: "ping" },
+      task: { ttl: 60_000 },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const result = JSON.parse(callLine).result as { task?: { taskId: string } };
+    assert.ok(result.task, "all-sync dispatcher tool still returns CreateTaskResult");
+    assert.ok(result.task!.taskId);
+  } finally {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

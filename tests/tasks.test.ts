@@ -599,11 +599,11 @@ tools:
 `;
   assert.throws(
     () => parseConfig(yamlText),
-    /tools\[bad\].*workflow handler.*requires execution\.taskSupport/i,
+    /tools\[bad\].*workflow case.*requires execution\.taskSupport/i,
   );
 });
 
-test("config rejects a task tool with a non-workflow handler", () => {
+test("config rejects a task tool with an inline outer handler (not workflow or dispatch)", () => {
   const yamlText = `
 server: { name: t, version: "0.0.1" }
 tools:
@@ -616,7 +616,7 @@ tools:
 `;
   assert.throws(
     () => parseConfig(yamlText),
-    /tools\[bad\].*task tool.*workflow handler/i,
+    /tools\[bad\].*task tool.*requires the outer handler to be workflow: or dispatch:/i,
   );
 });
 
@@ -661,4 +661,121 @@ tools:
   const cfg = parseConfig(yamlText);
   assert.equal(cfg.tools[0]!.execution?.taskSupport, "required");
   assert.ok("workflow" in cfg.tools[0]!.handler);
+});
+
+// Phase 7: dispatcher-task fusion cross-ref tests
+
+test("config accepts a task tool with a dispatch handler whose case routes to a workflow", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: x } }
+tools:
+  - name: jobs
+    description: x
+    input:
+      action: { type: string, required: true }
+    execution:
+      taskSupport: optional
+    handler:
+      dispatch:
+        on: action
+        cases:
+          help:
+            handler:
+              inline: { text: "help text" }
+          run:
+            handler:
+              workflow: { ref: w }
+`;
+  const cfg = parseConfig(yamlText);
+  assert.equal(cfg.tools[0]!.execution?.taskSupport, "optional");
+  assert.ok("dispatch" in cfg.tools[0]!.handler);
+});
+
+test("config rejects a non-task tool with a dispatch handler containing a workflow case", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: x } }
+tools:
+  - name: bad
+    description: x
+    input:
+      action: { type: string, required: true }
+    handler:
+      dispatch:
+        on: action
+        cases:
+          help:
+            handler:
+              inline: { text: x }
+          run:
+            handler:
+              workflow: { ref: w }
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /tools\[bad\].*workflow case.*requires execution\.taskSupport/i,
+  );
+});
+
+test("config rejects a workflow.ref inside a dispatch case that doesn't resolve", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: x } }
+tools:
+  - name: bad
+    description: x
+    input:
+      action: { type: string, required: true }
+    execution:
+      taskSupport: required
+    handler:
+      dispatch:
+        on: action
+        cases:
+          run:
+            handler:
+              workflow: { ref: "no_such" }
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /tools\[bad\]\.handler\.dispatch\.cases\.run\.handler\.workflow\.ref "no_such" not found in tasks:/,
+  );
+});
+
+test("config accepts a task tool with dispatch and NO workflow cases (all sync)", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: jobs
+    description: x
+    input:
+      action: { type: string, required: true }
+    execution:
+      taskSupport: optional
+    handler:
+      dispatch:
+        on: action
+        cases:
+          help:
+            handler:
+              inline: { text: "help" }
+          list:
+            handler:
+              inline: { text: "[]" }
+`;
+  const cfg = parseConfig(yamlText);
+  assert.equal(cfg.tools[0]!.execution?.taskSupport, "optional");
 });
