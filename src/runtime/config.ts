@@ -26,6 +26,21 @@ export interface InputFieldSchema {
   description?: string;
 }
 
+/**
+ * Tool execution mode. Plan 8: present on tools that opt into the MCP
+ * experimental task lifecycle. `taskSupport: "required"` means the tool
+ * MUST be invoked as a task (clients without task support get an error);
+ * `"optional"` means clients may invoke either as task or as plain
+ * tools/call (the SDK auto-polls for the latter). `"forbidden"` is not
+ * accepted — omit the execution: block to declare a non-task tool.
+ *
+ * Plan 8 only wires task tools whose handler is `workflow:`. Non-workflow
+ * task tools are rejected at parse time as a v1 scope limitation.
+ */
+export interface ExecutionConfig {
+  taskSupport: "required" | "optional";
+}
+
 export interface InlineHandler {
   inline: { text: string };
 }
@@ -185,6 +200,9 @@ export interface ToolDefinition {
   input?: Record<string, InputFieldSchema>;
   handler: Handler;
   transform?: JsonLogicRule;
+  /** Task execution mode. When present, the tool registers via the SDK's
+   * experimental.tasks.registerToolTask path instead of registerTool. */
+  execution?: ExecutionConfig;
 }
 
 /**
@@ -369,6 +387,7 @@ function validateTool(entry: unknown, index: number): ToolDefinition {
   }
   const handler = validateHandler(t["handler"], t["name"]);
   const transformRaw = t["transform"];
+  const execution = validateExecution(t["execution"], t["name"]);
   const tool: ToolDefinition = {
     name: t["name"],
     description: t["description"],
@@ -380,7 +399,37 @@ function validateTool(entry: unknown, index: number): ToolDefinition {
     // errors at invocation time become isError tool results.
     tool.transform = transformRaw as JsonLogicRule;
   }
+  if (execution !== undefined) {
+    tool.execution = execution;
+  }
   return tool;
+}
+
+function validateExecution(v: unknown, toolName: string): ExecutionConfig | undefined {
+  if (v === undefined) return undefined;
+  if (!v || typeof v !== "object" || Array.isArray(v)) {
+    throw new Error(`config: tools[${toolName}].execution must be a mapping`);
+  }
+  const e = v as Record<string, unknown>;
+
+  const known = new Set(["taskSupport"]);
+  for (const key of Object.keys(e)) {
+    if (!known.has(key)) {
+      throw new Error(`config: tools[${toolName}].execution: unknown key "${key}"`);
+    }
+  }
+
+  if (e["taskSupport"] === undefined) {
+    throw new Error(`config: tools[${toolName}].execution.taskSupport is required`);
+  }
+  const ts = e["taskSupport"];
+  if (ts !== "required" && ts !== "optional") {
+    throw new Error(
+      `config: tools[${toolName}].execution.taskSupport must be one of "required", "optional" (got ${JSON.stringify(ts)})`,
+    );
+  }
+
+  return { taskSupport: ts };
 }
 
 function validateInput(
