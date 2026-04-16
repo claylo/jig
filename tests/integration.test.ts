@@ -1477,3 +1477,33 @@ tools: []
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("server boots with tasks capability advertised even when no task tool is declared", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan8-cap-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan8-cap, version: "0.0.1" }
+tools: []
+`);
+  try {
+    const resp = await sendRpc(
+      "src/runtime/index.ts",
+      cfgPath,
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        } },
+      ],
+    );
+    const initResp = resp.find((r) => r.id === 1);
+    assert.ok(initResp, "initialize response present");
+    const result = initResp!.result as {
+      capabilities: { tasks?: object };
+    };
+    assert.ok(result.capabilities.tasks, "tasks capability advertised");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
