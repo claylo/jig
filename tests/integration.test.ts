@@ -2108,3 +2108,262 @@ test("plan 8 e2e against examples/tasks-one-tool.yaml: dispatcher fusion (help �
     child.kill();
   }
 });
+
+// ─── Plan 9: Elicitation integration tests ──────────────────────────
+
+test("plan 9 elicitation lifecycle: tools/call -> elicitation/create -> accept -> tasks/result", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan9-elicit-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan9-elicit, version: "0.0.1" }
+tasks:
+  confirm_workflow:
+    initial: ask
+    states:
+      ask:
+        mcpStatus: input_required
+        statusMessage: "Awaiting confirmation"
+        elicitation:
+          message: "Proceed?"
+          required: [ok]
+          schema:
+            ok:
+              type: boolean
+              description: "Confirm"
+        on:
+          - when: { "var": "elicitation.ok" }
+            target: done
+          - target: rejected
+      done:
+        mcpStatus: completed
+        result:
+          text: "Confirmed for {{input.item}}"
+      rejected:
+        mcpStatus: failed
+        result:
+          text: "Rejected for {{input.item}}"
+tools:
+  - name: confirm
+    description: "Confirm an item"
+    input:
+      item: { type: string, required: true }
+    execution:
+      taskSupport: required
+    handler:
+      workflow: { ref: confirm_workflow }
+`);
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  child.stderr.on("data", () => {}); // drain stderr
+
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    // 1. Initialize with elicitation capability
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {
+        tasks: { requests: { tools: { call: true } } },
+        elicitation: { form: {} },
+      },
+      clientInfo: { name: "test-elicit", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // 2. tools/call -> CreateTaskResult
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "confirm",
+      arguments: { item: "deploy-v3" },
+      task: { ttl: 60_000 },
+    } });
+
+    // 3. Wait for elicitation/create request from server
+    // NOTE: The SDK may assign id:0 to the elicitation request — use
+    // !== undefined/null checks, not !id (falsy-zero).
+    await waitForLine(stdoutLines, (l) => l.includes("elicitation/create"));
+    const elicitLine = stdoutLines.find((l) => l.includes("elicitation/create"))!;
+    const elicitReq = JSON.parse(elicitLine);
+    assert.ok(elicitReq.id !== undefined && elicitReq.id !== null, "elicitation request has an id");
+    assert.ok(
+      elicitReq.params?.requestedSchema?.properties?.ok,
+      "elicitation schema has 'ok' field",
+    );
+
+    // 4. Respond: accept with ok=true
+    send({ jsonrpc: "2.0", id: elicitReq.id, result: {
+      action: "accept",
+      content: { ok: true },
+    } });
+
+    // 5. Wait for tools/call response (may arrive after elicitation)
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const taskId = JSON.parse(callLine).result.task?.taskId;
+    assert.ok(taskId, "tools/call returned a taskId");
+
+    // 6. Poll tasks/get until completed
+    let status = "working";
+    let pollId = 3;
+    const start = Date.now();
+    while ((status === "working" || status === "input_required") && Date.now() - start < 10_000) {
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId } });
+      const idM = `"id":${pollId}`;
+      await waitForLine(stdoutLines, (l) => l.includes(idM) && l.includes('"result"'));
+      const getLine = stdoutLines.find((l) => l.includes(idM) && l.includes('"result"'))!;
+      status = JSON.parse(getLine).result.status;
+      pollId++;
+      if (status === "working" || status === "input_required") {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    assert.equal(status, "completed", "task reached completed");
+
+    // 7. tasks/result
+    send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId } });
+    const idM = `"id":${pollId}`;
+    await waitForLine(stdoutLines, (l) => l.includes(idM) && l.includes('"result"'));
+    const resLine = stdoutLines.find((l) => l.includes(idM) && l.includes('"result"'))!;
+    const finalText = JSON.parse(resLine).result.content[0].text;
+    assert.ok(finalText.includes("deploy-v3"), `result contains input: ${finalText}`);
+    assert.ok(finalText.includes("Confirmed"), `result says confirmed: ${finalText}`);
+  } finally {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("plan 9 elicitation decline: elicitation/create -> decline -> rejected", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan9-decline-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan9-decline, version: "0.0.1" }
+tasks:
+  confirm_workflow:
+    initial: ask
+    states:
+      ask:
+        mcpStatus: input_required
+        elicitation:
+          message: "Proceed?"
+          schema:
+            ok: { type: boolean }
+        on:
+          - when: { "var": "elicitation.ok" }
+            target: done
+          - target: rejected
+      done:
+        mcpStatus: completed
+        result:
+          text: "Confirmed"
+      rejected:
+        mcpStatus: failed
+        result:
+          text: "Declined"
+tools:
+  - name: confirm
+    description: "Confirm"
+    execution:
+      taskSupport: required
+    handler:
+      workflow: { ref: confirm_workflow }
+`);
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  child.stderr.on("data", () => {});
+
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {
+        tasks: { requests: { tools: { call: true } } },
+        elicitation: { form: {} },
+      },
+      clientInfo: { name: "test-decline", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "confirm",
+      arguments: {},
+      task: { ttl: 60_000 },
+    } });
+
+    // Wait for elicitation request
+    await waitForLine(stdoutLines, (l) => l.includes("elicitation/create"));
+    const elicitLine = stdoutLines.find((l) => l.includes("elicitation/create"))!;
+    const elicitReq = JSON.parse(elicitLine);
+    assert.ok(elicitReq.id !== undefined && elicitReq.id !== null);
+
+    // Decline
+    send({ jsonrpc: "2.0", id: elicitReq.id, result: { action: "decline" } });
+
+    // Wait for tools/call response
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const taskId = JSON.parse(callLine).result.task?.taskId;
+    assert.ok(taskId);
+
+    // Poll until terminal
+    let status = "working";
+    let pollId = 3;
+    const start = Date.now();
+    while ((status === "working" || status === "input_required") && Date.now() - start < 10_000) {
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId } });
+      const idM = `"id":${pollId}`;
+      await waitForLine(stdoutLines, (l) => l.includes(idM) && l.includes('"result"'));
+      const getLine = stdoutLines.find((l) => l.includes(idM) && l.includes('"result"'))!;
+      status = JSON.parse(getLine).result.status;
+      pollId++;
+      if (status === "working" || status === "input_required") {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    assert.equal(status, "failed", "task reached failed on decline");
+
+    send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId } });
+    const idM = `"id":${pollId}`;
+    await waitForLine(stdoutLines, (l) => l.includes(idM) && l.includes('"result"'));
+    const resLine = stdoutLines.find((l) => l.includes(idM) && l.includes('"result"'))!;
+    const finalText = JSON.parse(resLine).result.content[0].text;
+    assert.ok(finalText.includes("Declined"), `result says declined: ${finalText}`);
+  } finally {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
