@@ -364,3 +364,122 @@ tools:
 `;
   assert.throws(() => parseConfig(yamlText), /graphql: unknown key "bogus"/);
 });
+
+test("config accepts a tool with execution.taskSupport: required", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: longjob
+    description: "Long-running job"
+    execution:
+      taskSupport: required
+    handler:
+      inline: { text: ok }
+`;
+  const cfg = parseConfig(yamlText);
+  assert.equal(cfg.tools.length, 1);
+  assert.equal(cfg.tools[0]!.execution?.taskSupport, "required");
+});
+
+test("config accepts a tool with execution.taskSupport: optional", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: pollable
+    description: "May be called either way"
+    execution:
+      taskSupport: optional
+    handler:
+      inline: { text: ok }
+`;
+  const cfg = parseConfig(yamlText);
+  assert.equal(cfg.tools[0]!.execution?.taskSupport, "optional");
+});
+
+test("config accepts a tool without execution: (default = non-task)", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: plain
+    description: "Plain tool"
+    handler:
+      inline: { text: ok }
+`;
+  const cfg = parseConfig(yamlText);
+  assert.equal(cfg.tools[0]!.execution, undefined);
+});
+
+test("config rejects execution: that isn't a mapping", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: bad
+    description: x
+    execution: required
+    handler:
+      inline: { text: ok }
+`;
+  assert.throws(() => parseConfig(yamlText), /execution must be a mapping/);
+});
+
+test("config rejects execution: with no taskSupport", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: bad
+    description: x
+    execution: {}
+    handler:
+      inline: { text: ok }
+`;
+  assert.throws(() => parseConfig(yamlText), /execution\.taskSupport is required/);
+});
+
+test("config rejects execution.taskSupport: forbidden", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: bad
+    description: x
+    execution:
+      taskSupport: forbidden
+    handler:
+      inline: { text: ok }
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /taskSupport must be one of "required", "optional"/,
+  );
+});
+
+test("config rejects execution.taskSupport: bogus value", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: bad
+    description: x
+    execution:
+      taskSupport: maybe
+    handler:
+      inline: { text: ok }
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /taskSupport must be one of "required", "optional"/,
+  );
+});
+
+test("config rejects execution: with an unknown key", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tools:
+  - name: bad
+    description: x
+    execution:
+      taskSupport: required
+      bogus: 42
+    handler:
+      inline: { text: ok }
+`;
+  assert.throws(() => parseConfig(yamlText), /execution: unknown key "bogus"/);
+});
