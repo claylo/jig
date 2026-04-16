@@ -155,3 +155,154 @@ smoke-prompt:
     echo "$output" | grep '"id":6' | head -1 | jq -e '.result.completion.values | length >= 2' >/dev/null
     echo "$output" | tail -5 | jq .
     echo "smoke-prompt: OK"
+
+# Smoke-task: verify the Plan 8 dedicated-workflow example boots, tools/call
+# returns a CreateTaskResult, tasks/get reaches completed, and tasks/result
+# returns the rendered terminal text. Uses an inline node helper because the
+# InMemoryTaskStore keeps the event loop alive (sendRpc + pipe-and-exit
+# pattern doesn't work for task tools).
+smoke-task:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    node --experimental-transform-types -e '
+      import { spawn } from "node:child_process";
+      const child = spawn(process.execPath, [
+        "--experimental-transform-types",
+        "src/runtime/index.ts",
+        "--config",
+        "examples/tasks.yaml",
+      ], { stdio: ["pipe", "pipe", "inherit"] });
+      const lines = [];
+      let buf = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        buf += chunk;
+        let i;
+        while ((i = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, i).trim();
+          if (line) lines.push(line);
+          buf = buf.slice(i + 1);
+        }
+      });
+      const send = (m) => child.stdin.write(JSON.stringify(m) + "\n");
+      const wait = (pred, timeout = 5000) => new Promise((resolve, reject) => {
+        const start = Date.now();
+        const tick = setInterval(() => {
+          const found = lines.find(pred);
+          if (found) { clearInterval(tick); resolve(found); }
+          else if (Date.now() - start > timeout) { clearInterval(tick); reject(new Error("timeout waiting for: " + pred)); }
+        }, 25);
+      });
+      send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: { tasks: { requests: { tools: { call: true } } } }, clientInfo: { name: "smoke", version: "0" } } });
+      await wait((l) => l.includes("\"id\":1"));
+      send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      await new Promise((r) => setTimeout(r, 50));
+      send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "process_job", arguments: { jobId: "j-42" }, task: { ttl: 60000 } } });
+      const callLine = await wait((l) => l.includes("\"id\":2") && l.includes("\"result\""));
+      const callResp = JSON.parse(callLine);
+      const taskId = callResp.result.task?.taskId;
+      if (!taskId) { console.error("no taskId"); process.exit(1); }
+      let status = "working";
+      let pollId = 3;
+      const startPoll = Date.now();
+      while (status === "working" && Date.now() - startPoll < 5000) {
+        send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId } });
+        const idM = "\"id\":" + pollId;
+        const getLine = await wait((l) => l.includes(idM) && l.includes("\"result\""));
+        status = JSON.parse(getLine).result.status;
+        pollId++;
+        if (status === "working") await new Promise((r) => setTimeout(r, 50));
+      }
+      if (status !== "completed") { console.error("task did not complete: " + status); process.exit(1); }
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId } });
+      const idM = "\"id\":" + pollId;
+      const resLine = await wait((l) => l.includes(idM) && l.includes("\"result\""));
+      const finalText = JSON.parse(resLine).result.content[0].text;
+      if (!finalText.includes("j-42")) { console.error("result missing jobId: " + finalText); process.exit(1); }
+      if (!finalText.includes("#ops")) { console.error("result missing channel: " + finalText); process.exit(1); }
+      console.log(JSON.stringify({ taskId, status, finalText }, null, 2));
+      child.kill();
+    '
+    echo "smoke-task: OK"
+
+# Smoke-task-one-tool: verify the Plan 8 single-tool dispatcher example
+# boots. Exercises both a non-workflow case (help → synthetic one-step task)
+# and a workflow case (run → state-machine interpreter). Both must return
+# CreateTaskResult and reach completed status.
+smoke-task-one-tool:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    node --experimental-transform-types -e '
+      import { spawn } from "node:child_process";
+      const child = spawn(process.execPath, [
+        "--experimental-transform-types",
+        "src/runtime/index.ts",
+        "--config",
+        "examples/tasks-one-tool.yaml",
+      ], { stdio: ["pipe", "pipe", "inherit"] });
+      const lines = [];
+      let buf = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        buf += chunk;
+        let i;
+        while ((i = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, i).trim();
+          if (line) lines.push(line);
+          buf = buf.slice(i + 1);
+        }
+      });
+      const send = (m) => child.stdin.write(JSON.stringify(m) + "\n");
+      const wait = (pred, timeout = 5000) => new Promise((resolve, reject) => {
+        const start = Date.now();
+        const tick = setInterval(() => {
+          const found = lines.find(pred);
+          if (found) { clearInterval(tick); resolve(found); }
+          else if (Date.now() - start > timeout) { clearInterval(tick); reject(new Error("timeout waiting for: " + pred)); }
+        }, 25);
+      });
+      send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: { tasks: { requests: { tools: { call: true } } } }, clientInfo: { name: "smoke", version: "0" } } });
+      await wait((l) => l.includes("\"id\":1"));
+      send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      await new Promise((r) => setTimeout(r, 50));
+      // help action — non-workflow case becomes a synthetic one-step task
+      send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "jobs", arguments: { action: "help" }, task: { ttl: 60000 } } });
+      const helpLine = await wait((l) => l.includes("\"id\":2") && l.includes("\"result\""));
+      const helpTaskId = JSON.parse(helpLine).result.task?.taskId;
+      if (!helpTaskId) { console.error("help: no taskId"); process.exit(1); }
+      await new Promise((r) => setTimeout(r, 50));
+      send({ jsonrpc: "2.0", id: 3, method: "tasks/get", params: { taskId: helpTaskId } });
+      const helpGetLine = await wait((l) => l.includes("\"id\":3") && l.includes("\"result\""));
+      const helpStatus = JSON.parse(helpGetLine).result.status;
+      if (helpStatus !== "completed") { console.error("help did not complete: " + helpStatus); process.exit(1); }
+      send({ jsonrpc: "2.0", id: 4, method: "tasks/result", params: { taskId: helpTaskId } });
+      const helpResLine = await wait((l) => l.includes("\"id\":4") && l.includes("\"result\""));
+      const helpText = JSON.parse(helpResLine).result.content[0].text;
+      if (!helpText.includes("jobs management")) { console.error("help text wrong: " + helpText); process.exit(1); }
+      // run action — workflow case drives the interpreter
+      send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "jobs", arguments: { action: "run", jobId: "j-42" }, task: { ttl: 60000 } } });
+      const runLine = await wait((l) => l.includes("\"id\":5") && l.includes("\"result\""));
+      const runTaskId = JSON.parse(runLine).result.task?.taskId;
+      if (!runTaskId) { console.error("run: no taskId"); process.exit(1); }
+      let runStatus = "working";
+      let pollId = 6;
+      const startPoll = Date.now();
+      while (runStatus === "working" && Date.now() - startPoll < 5000) {
+        send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId: runTaskId } });
+        const idM = "\"id\":" + pollId;
+        const runGetLine = await wait((l) => l.includes(idM) && l.includes("\"result\""));
+        runStatus = JSON.parse(runGetLine).result.status;
+        pollId++;
+        if (runStatus === "working") await new Promise((r) => setTimeout(r, 50));
+      }
+      if (runStatus !== "completed") { console.error("run did not complete: " + runStatus); process.exit(1); }
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId: runTaskId } });
+      const idM = "\"id\":" + pollId;
+      const runResLine = await wait((l) => l.includes(idM) && l.includes("\"result\""));
+      const runText = JSON.parse(runResLine).result.content[0].text;
+      if (!runText.includes("j-42")) { console.error("run text missing jobId: " + runText); process.exit(1); }
+      if (!runText.includes("#ops")) { console.error("run text missing channel: " + runText); process.exit(1); }
+      console.log(JSON.stringify({ helpTaskId, helpStatus, runTaskId, runStatus, runText }, null, 2));
+      child.kill();
+    '
+    echo "smoke-task-one-tool: OK"
