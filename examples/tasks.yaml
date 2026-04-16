@@ -1,0 +1,98 @@
+# A Plan 8 example exercising the tasks: + execution: + workflow: surfaces.
+# Demonstrates:
+#   - tasks: top-level state-machine workflow with one happy path and
+#     one guarded failure branch
+#   - sequential actions in a state (parse then validate)
+#   - JSONLogic guard on a transition (when result.valid is false → reject)
+#   - terminal completed and failed states with rendered results
+#   - execution.taskSupport on a tool that opts into the task lifecycle
+#   - handler: { workflow: { ref: process_job } } routing
+#
+# Run with `just smoke-task`. Hermetic — no network, all inline handlers.
+# Real-world workflows would replace inline: actions with exec: calls to
+# sibling binaries; that pattern lands with the elicitation example in
+# Plan 9 so Plan 8 stays focused on the state-machine surface itself.
+#
+# NOTE: action results are JSON-parsed before binding to workflow.result.
+# Inline text '{"valid": true}' parses to { valid: true } so the guard
+# { "var": "result.valid" } evaluates correctly.
+#
+# NOTE: workflow.result holds the MOST RECENT action's output — it is NOT
+# accumulated across states. The completed state's terminal text below
+# only references result fields produced by the notifying state's action
+# (the last one to run). To carry data forward across states in v1, the
+# pattern is to re-emit needed fields from each state's last action.
+
+server:
+  name: jig-plan8-example
+  version: "1.0.0"
+  description: |
+    Demonstrates Plan 8: a process_job workflow with sequential
+    validation, branching on input quality, enrichment, and a
+    rendered terminal result.
+
+tasks:
+  process_job:
+    initial: validating
+
+    states:
+      validating:
+        mcpStatus: working
+        statusMessage: "Validating job input"
+        actions:
+          # Two sequential actions: parse the input, then schema-check it.
+          # Last action's result becomes workflow.result; the guard below
+          # uses result.valid to choose the next state.
+          - inline:
+              text: '{"parsed": true, "fields": ["jobId", "payload"]}'
+          - inline:
+              text: '{"valid": true, "issues": []}'
+        on:
+          - when: { "==": [{ var: "result.valid" }, false] }
+            target: rejected
+          - target: enriching
+
+      enriching:
+        mcpStatus: working
+        statusMessage: "Enriching with metadata"
+        actions:
+          - inline:
+              text: '{"enriched": true, "stamp": "2026-04-15T20:00:00Z", "owner": "ops"}'
+        on:
+          - target: notifying
+
+      notifying:
+        mcpStatus: working
+        statusMessage: "Posting completion notice"
+        actions:
+          - inline:
+              text: '{"posted": true, "channel": "#ops"}'
+        on:
+          - target: completed
+
+      completed:
+        mcpStatus: completed
+        result:
+          text: |
+            Job {{input.jobId}} processed.
+            Notification posted to: {{result.channel}}.
+
+      rejected:
+        mcpStatus: failed
+        result:
+          text: |
+            Job {{input.jobId}} rejected at validation.
+
+tools:
+  - name: process_job
+    description: "Run a job through the validate → enrich → notify pipeline."
+    input:
+      jobId:
+        type: string
+        required: true
+    execution:
+      taskSupport: required
+    handler:
+      workflow:
+        ref: process_job
+        ttl_ms: 60000
