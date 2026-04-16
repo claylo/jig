@@ -1,5 +1,7 @@
 import type {
   Handler,
+  ElicitationFieldSpec,
+  ElicitationSpec,
   StateSpec,
   TasksConfig,
   TransitionSpec,
@@ -14,6 +16,7 @@ import { render } from "./util/template.ts";
 const STATE_KNOWN = new Set([
   "mcpStatus",
   "statusMessage",
+  "elicitation",
   "actions",
   "on",
   "result",
@@ -128,13 +131,6 @@ function validateState(
   }
   const s = entry as Record<string, unknown>;
 
-  // Reject the Plan-9 elicitation: key explicitly so the error names the plan.
-  if ("elicitation" in s) {
-    throw new Error(
-      `config: tasks.${workflowName}.states.${stateName}: elicitation: blocks land in Plan 9 (input_required + elicitation/create round-trip). Remove the elicitation: key.`,
-    );
-  }
-
   for (const key of Object.keys(s)) {
     if (!STATE_KNOWN.has(key)) {
       throw new Error(
@@ -144,11 +140,6 @@ function validateState(
   }
 
   const mcpStatusRaw = s["mcpStatus"];
-  if (mcpStatusRaw === "input_required") {
-    throw new Error(
-      `config: tasks.${workflowName}.states.${stateName}: mcpStatus "input_required" lands in Plan 9 (elicitation). Use working/completed/failed in Plan 8.`,
-    );
-  }
   if (mcpStatusRaw === "cancelled") {
     throw new Error(
       `config: tasks.${workflowName}.states.${stateName}: mcpStatus "cancelled" is client-initiated only — set by the SDK when tasks/cancel is called. Authors cannot declare it as a terminal state.`,
@@ -156,16 +147,25 @@ function validateState(
   }
   if (
     mcpStatusRaw !== "working" &&
+    mcpStatusRaw !== "input_required" &&
     mcpStatusRaw !== "completed" &&
     mcpStatusRaw !== "failed"
   ) {
     throw new Error(
-      `config: tasks.${workflowName}.states.${stateName}.mcpStatus must be one of "working", "completed", "failed" (got ${JSON.stringify(mcpStatusRaw)})`,
+      `config: tasks.${workflowName}.states.${stateName}.mcpStatus must be one of "working", "input_required", "completed", "failed" (got ${JSON.stringify(mcpStatusRaw)})`,
     );
   }
-  const mcpStatus = mcpStatusRaw as "working" | "completed" | "failed";
+  const mcpStatus = mcpStatusRaw as "working" | "input_required" | "completed" | "failed";
 
   const isTerminal = mcpStatus === "completed" || mcpStatus === "failed";
+  const isInputRequired = mcpStatus === "input_required";
+
+  // elicitation: is only valid on input_required states.
+  if (!isInputRequired && s["elicitation"] !== undefined) {
+    throw new Error(
+      `config: tasks.${workflowName}.states.${stateName}: elicitation: is only valid on input_required states (this state has mcpStatus: ${mcpStatus})`,
+    );
+  }
 
   // Shape constraints.
   if (isTerminal) {
@@ -184,7 +184,29 @@ function validateState(
         `config: tasks.${workflowName}.states.${stateName}: terminal state MUST NOT declare on:`,
       );
     }
+  } else if (isInputRequired) {
+    if (s["elicitation"] === undefined) {
+      throw new Error(
+        `config: tasks.${workflowName}.states.${stateName}: input_required state requires an elicitation: block`,
+      );
+    }
+    if (s["actions"] !== undefined) {
+      throw new Error(
+        `config: tasks.${workflowName}.states.${stateName}: input_required state MUST NOT declare actions: (pre-elicitation work belongs in the prior state)`,
+      );
+    }
+    if (s["result"] !== undefined) {
+      throw new Error(
+        `config: tasks.${workflowName}.states.${stateName}: input_required state MUST NOT declare result: (it is not terminal)`,
+      );
+    }
+    if (s["on"] === undefined) {
+      throw new Error(
+        `config: tasks.${workflowName}.states.${stateName}: input_required state requires an on: array (transitions after elicitation response)`,
+      );
+    }
   } else {
+    // mcpStatus: working
     if (s["result"] !== undefined) {
       throw new Error(
         `config: tasks.${workflowName}.states.${stateName}: non-terminal state (mcpStatus: working) MUST NOT declare result:`,
@@ -207,6 +229,10 @@ function validateState(
       );
     }
     out.statusMessage = s["statusMessage"];
+  }
+
+  if (s["elicitation"] !== undefined) {
+    out.elicitation = validateElicitation(s["elicitation"], workflowName, stateName);
   }
 
   if (s["actions"] !== undefined) {
@@ -266,6 +292,113 @@ function validateState(
     }
     out.result = { text: r["text"] };
   }
+
+  return out;
+}
+
+function validateElicitation(
+  entry: unknown,
+  workflowName: string,
+  stateName: string,
+): ElicitationSpec {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(
+      `config: tasks.${workflowName}.states.${stateName}.elicitation must be a mapping`,
+    );
+  }
+  const e = entry as Record<string, unknown>;
+
+  const known = new Set(["message", "schema", "required"]);
+  for (const key of Object.keys(e)) {
+    if (!known.has(key)) {
+      throw new Error(
+        `config: tasks.${workflowName}.states.${stateName}.elicitation: unknown key "${key}"`,
+      );
+    }
+  }
+
+  if (typeof e["message"] !== "string" || e["message"].length === 0) {
+    throw new Error(
+      `config: tasks.${workflowName}.states.${stateName}.elicitation.message is required and must be a non-empty string`,
+    );
+  }
+
+  if (!e["schema"] || typeof e["schema"] !== "object" || Array.isArray(e["schema"])) {
+    throw new Error(
+      `config: tasks.${workflowName}.states.${stateName}.elicitation.schema is required and must be a mapping`,
+    );
+  }
+  const rawSchema = e["schema"] as Record<string, unknown>;
+  if (Object.keys(rawSchema).length === 0) {
+    throw new Error(
+      `config: tasks.${workflowName}.states.${stateName}.elicitation.schema must declare at least one field`,
+    );
+  }
+
+  const schema: Record<string, ElicitationFieldSpec> = {};
+  for (const [fieldName, fieldEntry] of Object.entries(rawSchema)) {
+    schema[fieldName] = validateElicitationField(
+      fieldEntry, workflowName, stateName, fieldName,
+    );
+  }
+
+  const out: ElicitationSpec = { message: e["message"], schema };
+
+  if (e["required"] !== undefined) {
+    if (!Array.isArray(e["required"]) || !e["required"].every((r: unknown) => typeof r === "string")) {
+      throw new Error(
+        `config: tasks.${workflowName}.states.${stateName}.elicitation.required must be an array of strings`,
+      );
+    }
+    for (const req of e["required"] as string[]) {
+      if (!(req in schema)) {
+        throw new Error(
+          `config: tasks.${workflowName}.states.${stateName}.elicitation.required lists "${req}" but it is not in schema`,
+        );
+      }
+    }
+    out.required = e["required"] as string[];
+  }
+
+  return out;
+}
+
+const ELICITATION_FIELD_TYPES = new Set(["string", "boolean", "number", "integer", "array"]);
+
+function validateElicitationField(
+  entry: unknown,
+  workflowName: string,
+  stateName: string,
+  fieldName: string,
+): ElicitationFieldSpec {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(
+      `config: tasks.${workflowName}.states.${stateName}.elicitation.schema.${fieldName} must be a mapping`,
+    );
+  }
+  const f = entry as Record<string, unknown>;
+
+  if (!ELICITATION_FIELD_TYPES.has(f["type"] as string)) {
+    throw new Error(
+      `config: tasks.${workflowName}.states.${stateName}.elicitation.schema.${fieldName}.type must be one of "string", "boolean", "number", "integer", "array" (got ${JSON.stringify(f["type"])})`,
+    );
+  }
+
+  const out: ElicitationFieldSpec = { type: f["type"] as ElicitationFieldSpec["type"] };
+  if (typeof f["description"] === "string") out.description = f["description"];
+  if (typeof f["title"] === "string") out.title = f["title"];
+  if (f["default"] !== undefined) out.default = f["default"];
+  if (Array.isArray(f["enum"])) out.enum = f["enum"] as string[];
+  if (Array.isArray(f["enumNames"])) out.enumNames = f["enumNames"] as string[];
+  if (Array.isArray(f["oneOf"])) out.oneOf = f["oneOf"] as Array<{ const: string; title: string }>;
+  if (typeof f["format"] === "string") out.format = f["format"] as ElicitationFieldSpec["format"];
+  if (typeof f["minLength"] === "number") out.minLength = f["minLength"];
+  if (typeof f["maxLength"] === "number") out.maxLength = f["maxLength"];
+  if (typeof f["minimum"] === "number") out.minimum = f["minimum"];
+  if (typeof f["maximum"] === "number") out.maximum = f["maximum"];
+  if (f["items"] !== undefined && typeof f["items"] === "object") out.items = f["items"] as { type: "string"; enum: string[] };
+  if (typeof f["minItems"] === "number") out.minItems = f["minItems"];
+  if (typeof f["maxItems"] === "number") out.maxItems = f["maxItems"];
 
   return out;
 }
@@ -334,7 +467,7 @@ export interface InterpreterTaskStore {
   ): Promise<void>;
   updateTaskStatus(
     taskId: string,
-    status: "working" | "completed" | "failed",
+    status: "working" | "input_required" | "completed" | "failed",
     statusMessage?: string,
   ): Promise<void>;
 }
