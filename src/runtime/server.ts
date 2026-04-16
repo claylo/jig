@@ -49,11 +49,15 @@
 // cast is the `ToolCallback` — see `registerTool` below.
 
 import {
+  InMemoryTaskStore,
   McpServer,
   ResourceTemplate,
   fromJsonSchema,
   type CallToolResult,
+  type CreateTaskResult,
+  type CreateTaskServerContext,
   type GetPromptResult,
+  type GetTaskResult,
   type JsonSchemaType,
   type ReadResourceResult,
   type ReadResourceTemplateCallback,
@@ -61,8 +65,10 @@ import {
   type RegisteredResource,
   type RegisteredResourceTemplate,
   type RegisteredTool,
+  type RequestTaskStore,
   type ResourceMetadata,
   type StandardSchemaWithJSON,
+  type TaskServerContext,
   type ToolAnnotations,
   type ToolCallback,
   type Transport,
@@ -105,6 +111,50 @@ export interface RegisterPromptSpec {
 
 /** Re-export so prompts.ts can type the return value without touching the SDK. */
 export type RegisteredPromptHandle = RegisteredPrompt;
+
+/** Re-export so tasks.ts can type terminal results without touching the SDK. */
+export type { CallToolResult };
+
+/**
+ * Spec for registering one task tool. Mirrors RegisterToolSpec (description,
+ * inputSchema, title, annotations) but adds `taskSupport` — the value lifted
+ * from the YAML's `execution.taskSupport`. The adapter forwards this
+ * verbatim into the SDK's TaskToolExecution.
+ */
+export interface RegisterTaskToolSpec {
+  description: string;
+  inputSchema?: JsonSchemaObject;
+  title?: string;
+  annotations?: ToolAnnotations;
+  taskSupport: "required" | "optional";
+}
+
+/**
+ * Lean three-callback handler shape jig passes into registerToolTask.
+ * Mirrors the SDK's ToolTaskHandler shape but exposes the task store via
+ * the SDK's RequestTaskStore type so callers stay off the SDK package
+ * (they import JigTaskHandler from this module, not from the SDK).
+ *
+ *   createTask: receives (args, store) — args are the tools/call arguments
+ *     normalized to Record<string, unknown>; store is the request-scoped
+ *     RequestTaskStore. Returns a CreateTaskResult ({ task }).
+ *   getTask: receives (taskId, store). Returns a GetTaskResult.
+ *   getTaskResult: receives (taskId, store). Returns a CallToolResult.
+ */
+export interface JigTaskHandler {
+  createTask(
+    args: Record<string, unknown>,
+    store: RequestTaskStore,
+  ): Promise<CreateTaskResult>;
+  getTask(
+    taskId: string,
+    store: RequestTaskStore,
+  ): Promise<GetTaskResult>;
+  getTaskResult(
+    taskId: string,
+    store: RequestTaskStore,
+  ): Promise<CallToolResult>;
+}
 
 /**
  * Minimal spec a caller passes into registerResource. Mirrors the shape
@@ -213,6 +263,20 @@ export interface JigServerHandle {
    * MUST be called before server.connect().
    */
   wireCompletions(completions: CompletionsConfig): void;
+  /**
+   * Register a task-based tool via the SDK's experimental.tasks
+   * surface. The adapter bridges inputSchema via fromJsonSchema and
+   * wraps the three callbacks (createTask, getTask, getTaskResult) so
+   * the caller stays off the SDK package. Returns the SDK's
+   * RegisteredTool handle.
+   *
+   * MUST be called before server.connect().
+   */
+  registerToolTask(
+    name: string,
+    spec: RegisterTaskToolSpec,
+    handler: JigTaskHandler,
+  ): RegisteredTool;
   /** Attach to a transport and begin serving. */
   connect(transport: Transport): Promise<void>;
 }
@@ -270,6 +334,15 @@ export function createServer(
         // also means `initialize` advertises it even before Phase 4
         // registers the first tool.
         tools: { listChanged: true },
+        // Plan 8: always advertise tasks capability with an in-memory
+        // store. Tools without execution.taskSupport never reach the
+        // tasks code path; advertising the capability up front lets
+        // task-aware clients negotiate even when no task tool is
+        // declared (the SDK answers tasks/get for unknown IDs with a
+        // standard error response).
+        tasks: {
+          taskStore: new InMemoryTaskStore(),
+        },
       },
       ...(config.server.instructions !== undefined && {
         instructions: config.server.instructions,
@@ -427,6 +500,79 @@ export function createServer(
           },
         };
       });
+    },
+    registerToolTask(name, spec, handler) {
+      const inputSchema: StandardSchemaWithJSON | undefined =
+        spec.inputSchema !== undefined ? fromJsonSchema(spec.inputSchema) : undefined;
+
+      // Bridge the three jig callbacks into the SDK's ToolTaskHandler
+      // shape. The SDK invokes createTask as (args, ctx) where ctx
+      // exposes ctx.task.store: RequestTaskStore. getTask and
+      // getTaskResult receive a TaskServerContext (ctx.task.id +
+      // ctx.task.store). We translate to jig's lean signatures.
+      const taskHandler = {
+        createTask: async (
+          args: Record<string, unknown>,
+          ctx: CreateTaskServerContext,
+        ) => handler.createTask(args, ctx.task.store),
+        getTask: async (
+          _args: Record<string, unknown>,
+          ctx: TaskServerContext,
+        ) => handler.getTask(ctx.task.id, ctx.task.store),
+        getTaskResult: async (
+          _args: Record<string, unknown>,
+          ctx: TaskServerContext,
+        ) => handler.getTaskResult(ctx.task.id, ctx.task.store),
+      };
+
+      // Cast through Function for both branches. The SDK's registerToolTask
+      // overloads fight with TypeScript's inference on the handler generic —
+      // same problem registerTool solves with its ToolCallback cast, but
+      // worse here because ToolTaskHandler has three callbacks. The runtime
+      // shapes are correct on both sides; this is purely a type-boundary
+      // workaround at the SDK quarantine point.
+      const register = server.experimental.tasks.registerToolTask.bind(
+        server.experimental.tasks,
+      ) as Function;
+
+      if (inputSchema !== undefined) {
+        return register(
+          name,
+          {
+            description: render(spec.description, { probe }),
+            inputSchema,
+            execution: { taskSupport: spec.taskSupport },
+            ...(spec.title !== undefined && { title: spec.title }),
+            ...(spec.annotations !== undefined && { annotations: spec.annotations }),
+          },
+          taskHandler,
+        ) as RegisteredTool;
+      }
+      // No-schema branch: SDK invokes callbacks with `undefined` args.
+      // Wrap to translate undefined → empty object for jig's handler.
+      return register(
+        name,
+        {
+          description: render(spec.description, { probe }),
+          execution: { taskSupport: spec.taskSupport },
+          ...(spec.title !== undefined && { title: spec.title }),
+          ...(spec.annotations !== undefined && { annotations: spec.annotations }),
+        },
+        {
+          createTask: async (
+            _args: undefined,
+            ctx: CreateTaskServerContext,
+          ) => handler.createTask({}, ctx.task.store),
+          getTask: async (
+            _args: undefined,
+            ctx: TaskServerContext,
+          ) => handler.getTask(ctx.task.id, ctx.task.store),
+          getTaskResult: async (
+            _args: undefined,
+            ctx: TaskServerContext,
+          ) => handler.getTaskResult(ctx.task.id, ctx.task.store),
+        },
+      ) as RegisteredTool;
     },
     async connect(transport: Transport) {
       await server.connect(transport);
