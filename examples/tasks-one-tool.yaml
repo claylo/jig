@@ -1,0 +1,118 @@
+# A Plan 8 example demonstrating the SINGLE-TOOL DISPATCHER pattern with
+# state-machine workflows. This preserves the streamlinear sub-1k-token
+# contract that motivates jig: ONE MCP tool serves multiple actions.
+# Different actions can be different shapes — some return synchronously
+# (help, list), some kick off a multi-state workflow (run).
+#
+# The shape lands in Phase 7 (dispatcher-task fusion). Phase 6 alone
+# rejects this YAML at the cross-ref check ("task tool requires workflow
+# handler") because it expects the OUTER handler to be workflow:. Phase 7
+# relaxes that check to allow OUTER handler = dispatch: with at least one
+# case routing to a workflow.
+#
+# Run with `just smoke-task-one-tool`. Hermetic — no network, all inline
+# handlers.
+#
+# DESIGN NOTES:
+#   - tools/list shows ONE tool ("jobs"), not three. The action enum is
+#     synthesized from the dispatch case names.
+#   - execution.taskSupport: optional means the SDK negotiates with the
+#     client. Task-aware clients get CreateTaskResult; non-task clients
+#     get the SDK's auto-poll-to-completion behavior.
+#   - Non-workflow cases (help, list) become "synthetic one-step tasks"
+#     at boot — the createTask callback invokes them via the existing
+#     handlers/index.ts invoke(), then immediately calls
+#     storeTaskResult. Clients see a task that's already completed by
+#     the time tasks/get is called.
+#   - The workflow case (run) drives interpretWorkflow, same as
+#     examples/tasks.yaml's dedicated workflow tool.
+
+server:
+  name: jig-plan8-onetool
+  version: "1.0.0"
+  description: |
+    Demonstrates Plan 8's single-tool dispatcher pattern: one MCP
+    tool whose dispatch cases mix synchronous handlers (help, list)
+    with a state-machine workflow (run).
+
+tasks:
+  process_job:
+    initial: validating
+
+    states:
+      validating:
+        mcpStatus: working
+        statusMessage: "Validating job input"
+        actions:
+          - inline:
+              text: '{"valid": true}'
+        on:
+          - when: { "==": [{ var: "result.valid" }, false] }
+            target: rejected
+          - target: notifying
+
+      notifying:
+        mcpStatus: working
+        statusMessage: "Posting completion notice"
+        actions:
+          - inline:
+              text: '{"posted": true, "channel": "#ops"}'
+        on:
+          - target: completed
+
+      completed:
+        mcpStatus: completed
+        result:
+          text: |
+            Job {{input.jobId}} processed.
+            Notification posted to: {{result.channel}}.
+
+      rejected:
+        mcpStatus: failed
+        result:
+          text: |
+            Job {{input.jobId}} rejected at validation.
+
+tools:
+  - name: jobs
+    description: |
+      Jobs management — single MCP tool, multiple actions.
+
+      {"action":"help"}                    → docs (synchronous)
+      {"action":"list"}                    → list pending jobs (synchronous)
+      {"action":"run", "jobId":"j-42"}     → kick off the validate→notify
+                                             workflow (returns a task)
+
+    input:
+      action:
+        type: string
+        required: true
+      jobId:
+        type: string
+        description: "Required for action=run"
+
+    execution:
+      taskSupport: optional
+
+    handler:
+      dispatch:
+        on: action
+        cases:
+          help:
+            handler:
+              inline:
+                text: |
+                  jobs management. Actions: help, list, run.
+
+                    {"action":"list"}                   → list pending jobs
+                    {"action":"run", "jobId":"j-42"}    → kick off processing
+          list:
+            handler:
+              inline:
+                text: '[{"jobId": "j-1", "status": "pending"}]'
+          run:
+            requires: [jobId]
+            handler:
+              workflow:
+                ref: process_job
+                ttl_ms: 60000
