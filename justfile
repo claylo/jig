@@ -371,7 +371,7 @@ smoke-task-elicitation:
       const elicitLine = await wait((l) => l.includes("elicitation/create") && l.includes("requestedSchema"));
       const elicitReq = JSON.parse(elicitLine);
       const elicitId = elicitReq.id;
-      if (!elicitId) { console.error("no elicitation request id"); process.exit(1); }
+      if (elicitId === undefined || elicitId === null) { console.error("no elicitation request id"); process.exit(1); }
       // Verify the elicitation has our schema fields
       const schema = elicitReq.params?.requestedSchema;
       if (!schema?.properties?.approved) { console.error("missing approved field in schema"); process.exit(1); }
