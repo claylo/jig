@@ -211,9 +211,46 @@ export interface TransitionSpec {
  * The validator enforces the shape at parse time so the interpreter can
  * trust state.actions / state.on / state.result without re-checking.
  */
+/**
+ * One field in an elicitation form schema. Subset of the MCP SDK's
+ * requestedSchema property types. The interpreter translates these
+ * to the SDK's form-mode elicitation shape at runtime.
+ */
+export interface ElicitationFieldSpec {
+  type: "string" | "boolean" | "number" | "integer" | "array";
+  description?: string;
+  title?: string;
+  // string-specific
+  enum?: string[];
+  enumNames?: string[];
+  oneOf?: Array<{ const: string; title: string }>;
+  format?: "email" | "date" | "uri" | "date-time";
+  minLength?: number;
+  maxLength?: number;
+  default?: unknown;
+  // number/integer-specific
+  minimum?: number;
+  maximum?: number;
+  // array-specific
+  items?: { type: "string"; enum: string[] };
+  minItems?: number;
+  maxItems?: number;
+}
+
+/**
+ * Elicitation block on an input_required state. Drives a form-mode
+ * elicitation/create request to the client.
+ */
+export interface ElicitationSpec {
+  message: string;
+  required?: string[];
+  schema: Record<string, ElicitationFieldSpec>;
+}
+
 export interface StateSpec {
-  mcpStatus: "working" | "completed" | "failed";
+  mcpStatus: "working" | "input_required" | "completed" | "failed";
   statusMessage?: string;
+  elicitation?: ElicitationSpec;
   actions?: Handler[];
   on?: TransitionSpec[];
   result?: { text: string };

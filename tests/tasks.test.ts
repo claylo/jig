@@ -98,24 +98,31 @@ tools: []
   assert.throws(() => parseConfig(yamlText), /tasks\.w\.states is required/);
 });
 
-test("config rejects a state with mcpStatus: input_required", () => {
+test("config accepts a state with mcpStatus: input_required and elicitation:", () => {
   const yamlText = `
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
-    initial: a
+    initial: ask
     states:
-      a:
+      ask:
         mcpStatus: input_required
+        statusMessage: "Waiting for input"
+        elicitation:
+          message: "Approve?"
+          schema:
+            approved: { type: boolean }
         on:
-          - target: b
-      b: { mcpStatus: completed, result: { text: x } }
+          - target: done
+      done: { mcpStatus: completed, result: { text: x } }
 tools: []
 `;
-  assert.throws(
-    () => parseConfig(yamlText),
-    /input_required.*Plan 9/i,
-  );
+  const cfg = parseConfig(yamlText);
+  const state = cfg.tasks!["w"]!.states["ask"]!;
+  assert.equal(state.mcpStatus, "input_required");
+  assert.equal(state.elicitation!.message, "Approve?");
+  assert.deepEqual(Object.keys(state.elicitation!.schema), ["approved"]);
+  assert.equal(state.elicitation!.schema["approved"]!.type, "boolean");
 });
 
 test("config rejects a state with mcpStatus: cancelled", () => {
@@ -150,7 +157,7 @@ tools: []
 `;
   assert.throws(
     () => parseConfig(yamlText),
-    /mcpStatus must be one of "working", "completed", "failed"/,
+    /mcpStatus must be one of "working", "input_required", "completed", "failed"/,
   );
 });
 
@@ -272,7 +279,7 @@ tools: []
   );
 });
 
-test("config rejects a state with elicitation: (Plan 9)", () => {
+test("config rejects elicitation: on a working state (only valid on input_required)", () => {
   const yamlText = `
 server: { name: t, version: "0.0.1" }
 tasks:
@@ -282,9 +289,9 @@ tasks:
       a:
         mcpStatus: working
         elicitation:
-          message: "approve?"
+          message: "nope"
           schema:
-            approved: { type: boolean }
+            x: { type: boolean }
         on:
           - target: b
       b: { mcpStatus: completed, result: { text: x } }
@@ -292,7 +299,7 @@ tools: []
 `;
   assert.throws(
     () => parseConfig(yamlText),
-    /elicitation.*Plan 9/i,
+    /elicitation.*only valid.*input_required/i,
   );
 });
 
@@ -315,6 +322,254 @@ tools: []
     () => parseConfig(yamlText),
     /tasks\.w\.states\.a: unknown key "bogus"/,
   );
+});
+
+test("config rejects input_required without elicitation:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        on:
+          - target: b
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /input_required.*requires.*elicitation/i,
+  );
+});
+
+test("config rejects input_required with actions:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          message: "x"
+          schema:
+            ok: { type: boolean }
+        actions:
+          - inline: { text: nope }
+        on:
+          - target: b
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /input_required.*MUST NOT.*actions/i,
+  );
+});
+
+test("config rejects input_required without on:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          message: "x"
+          schema:
+            ok: { type: boolean }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /input_required.*requires.*on/i,
+  );
+});
+
+test("config rejects input_required with result:", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          message: "x"
+          schema:
+            ok: { type: boolean }
+        on:
+          - target: b
+        result: { text: nope }
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /input_required.*MUST NOT.*result/i,
+  );
+});
+
+test("config rejects elicitation: with missing message", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          schema:
+            ok: { type: boolean }
+        on:
+          - target: b
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /elicitation\.message.*required/i,
+  );
+});
+
+test("config rejects elicitation: with missing schema", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          message: "x"
+        on:
+          - target: b
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /elicitation\.schema.*required/i,
+  );
+});
+
+test("config rejects elicitation: with empty schema", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          message: "x"
+          schema: {}
+        on:
+          - target: b
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /elicitation\.schema.*at least one field/i,
+  );
+});
+
+test("config rejects elicitation field with invalid type", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          message: "x"
+          schema:
+            name: { type: object }
+        on:
+          - target: b
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /elicitation\.schema\.name\.type must be one of/i,
+  );
+});
+
+test("config rejects elicitation.required listing an undeclared field", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a:
+        mcpStatus: input_required
+        elicitation:
+          message: "x"
+          required: [ghost]
+          schema:
+            ok: { type: boolean }
+        on:
+          - target: b
+      b: { mcpStatus: completed, result: { text: x } }
+tools: []
+`;
+  assert.throws(
+    () => parseConfig(yamlText),
+    /required.*"ghost".*not in schema/i,
+  );
+});
+
+test("config accepts elicitation with required + multiple field types", () => {
+  const yamlText = `
+server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: ask
+    states:
+      ask:
+        mcpStatus: input_required
+        elicitation:
+          message: "Configure"
+          required: [env]
+          schema:
+            env:
+              type: string
+              enum: [staging, production]
+            count:
+              type: integer
+              minimum: 1
+              maximum: 10
+            notify:
+              type: boolean
+              default: true
+        on:
+          - target: done
+      done: { mcpStatus: completed, result: { text: ok } }
+tools: []
+`;
+  const cfg = parseConfig(yamlText);
+  const el = cfg.tasks!["w"]!.states["ask"]!.elicitation!;
+  assert.deepEqual(el.required, ["env"]);
+  assert.equal(el.schema["env"]!.type, "string");
+  assert.deepEqual(el.schema["env"]!.enum, ["staging", "production"]);
+  assert.equal(el.schema["count"]!.type, "integer");
+  assert.equal(el.schema["count"]!.minimum, 1);
+  assert.equal(el.schema["notify"]!.type, "boolean");
+  assert.equal(el.schema["notify"]!.default, true);
 });
 
 test("config rejects a transition with an unknown key", () => {
