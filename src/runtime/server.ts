@@ -340,8 +340,15 @@ export function createServer(
         // task-aware clients negotiate even when no task tool is
         // declared (the SDK answers tasks/get for unknown IDs with a
         // standard error response).
+        //
+        // The SDK constructor strips taskStore/taskMessageQueue from
+        // the capability and keeps the rest as "wireCapabilities" for
+        // assertToolsCallTaskCapability. We must include
+        // requests.tools.call explicitly so the assertion passes at
+        // tools/call time.
         tasks: {
           taskStore: new InMemoryTaskStore(),
+          requests: { tools: { call: true } } as Record<string, unknown>,
         },
       },
       ...(config.server.instructions !== undefined && {

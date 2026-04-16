@@ -1507,3 +1507,177 @@ tools: []
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("tools/call on a task tool returns a CreateTaskResult, not a CallToolResult", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan8-create-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan8-create, version: "0.0.1" }
+tasks:
+  instant:
+    initial: done
+    states:
+      done:
+        mcpStatus: completed
+        result:
+          text: "instant complete"
+tools:
+  - name: do_thing
+    description: "Instant task"
+    execution:
+      taskSupport: required
+    handler:
+      workflow: { ref: instant }
+`);
+  // Task tools keep the InMemoryTaskStore's event loop alive, so the
+  // child process never exits on stdin close. Use spawn + explicit kill.
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tasks: { requests: { tools: { call: true } } } },
+      clientInfo: { name: "test", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "do_thing",
+      arguments: {},
+      task: { ttl: 60_000 },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+    const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+    const callResp = JSON.parse(callLine);
+    const result = callResp.result as { task?: { taskId: string; status: string } };
+    assert.ok(result.task, "tools/call returned a task object (CreateTaskResult shape)");
+    assert.ok(result.task!.taskId, "task has a taskId");
+  } finally {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("plan 8 task lifecycle: tools/call -> tasks/get -> tasks/result returns interpreter output", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jig-plan8-lifecycle-"));
+  const cfgPath = join(dir, "test.yaml");
+  writeFileSync(cfgPath, `
+server: { name: plan8-lifecycle, version: "0.0.1" }
+tasks:
+  echo_workflow:
+    initial: compute
+    states:
+      compute:
+        mcpStatus: working
+        statusMessage: "computing"
+        actions:
+          - inline: { text: '{"squared": 16}' }
+        on:
+          - target: done
+      done:
+        mcpStatus: completed
+        result:
+          text: "input.n={{input.n}} squared={{result.squared}}"
+tools:
+  - name: square
+    description: "Square a number via workflow"
+    input:
+      n: { type: integer, required: true }
+    execution:
+      taskSupport: required
+    handler:
+      workflow: { ref: echo_workflow }
+`);
+  const child = spawn(
+    process.execPath,
+    ["--experimental-transform-types", "src/runtime/index.ts", "--config", cfgPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdoutLines: string[] = [];
+  let buf = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) stdoutLines.push(line);
+    }
+  });
+
+  const send = (req: object) => child.stdin.write(JSON.stringify(req) + "\n");
+
+  try {
+    // 1. initialize + initialized notification
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25",
+      capabilities: { tasks: { requests: { tools: { call: true } } } },
+      clientInfo: { name: "lifecycle", version: "0" },
+    } });
+    await waitForLine(stdoutLines, (l) => l.includes('"id":1'));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // 2. tools/call → CreateTaskResult
+      send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+        name: "square",
+        arguments: { n: 4 },
+        task: { ttl: 60_000 },
+      } });
+      await waitForLine(stdoutLines, (l) => l.includes('"id":2') && l.includes('"result"'));
+      const callLine = stdoutLines.find((l) => l.includes('"id":2') && l.includes('"result"'))!;
+      const callResp = JSON.parse(callLine);
+      const taskId = callResp.result.task.taskId;
+      assert.ok(taskId, "got taskId");
+
+      // 3. Poll tasks/get until status is terminal
+      let status = "working";
+      let pollId = 3;
+      const start = Date.now();
+      while (status === "working" && Date.now() - start < 5_000) {
+        send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId } });
+        const idMarker = `"id":${pollId}`;
+        await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+        const getResp = JSON.parse(stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!);
+        status = getResp.result.status;
+        pollId++;
+        if (status === "working") {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+      assert.equal(status, "completed", "task reached completed status");
+
+      // 4. tasks/result → final CallToolResult
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId } });
+      const idMarker = `"id":${pollId}`;
+      await waitForLine(stdoutLines, (l) => l.includes(idMarker) && l.includes('"result"'));
+      const resultResp = JSON.parse(stdoutLines.find((l) => l.includes(idMarker) && l.includes('"result"'))!);
+      const finalResult = resultResp.result as {
+        content: Array<{ type: string; text: string }>;
+      };
+      assert.equal(finalResult.content[0]!.text, "input.n=4 squared=16");
+    } finally {
+      child.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+});

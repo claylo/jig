@@ -368,13 +368,18 @@ tools:
 test("config accepts a tool with execution.taskSupport: required", () => {
   const yamlText = `
 server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: ok } }
 tools:
   - name: longjob
     description: "Long-running job"
     execution:
       taskSupport: required
     handler:
-      inline: { text: ok }
+      workflow: { ref: w }
 `;
   const cfg = parseConfig(yamlText);
   assert.equal(cfg.tools.length, 1);
@@ -384,13 +389,18 @@ tools:
 test("config accepts a tool with execution.taskSupport: optional", () => {
   const yamlText = `
 server: { name: t, version: "0.0.1" }
+tasks:
+  w:
+    initial: a
+    states:
+      a: { mcpStatus: completed, result: { text: ok } }
 tools:
   - name: pollable
     description: "May be called either way"
     execution:
       taskSupport: optional
     handler:
-      inline: { text: ok }
+      workflow: { ref: w }
 `;
   const cfg = parseConfig(yamlText);
   assert.equal(cfg.tools[0]!.execution?.taskSupport, "optional");
