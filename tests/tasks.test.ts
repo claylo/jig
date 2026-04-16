@@ -642,6 +642,9 @@ function makeTrackingStore() {
   };
 }
 
+/** No-op elicit stub — phases before Phase 4 never hit input_required states. */
+const noopElicit = async (): Promise<{ action: "cancel" }> => ({ action: "cancel" });
+
 test("interpreter runs a single-state workflow that goes straight to a completed terminal", async () => {
   const cfg = validateTasks(
     {
@@ -662,6 +665,7 @@ test("interpreter runs a single-state workflow that goes straight to a completed
     store: tracker.store,
     taskId: "stub-task",
     invoke: invokeHandler,
+    elicit: noopElicit,
   });
   assert.equal(tracker.results.length, 1);
   assert.equal(tracker.results[0]!.status, "completed");
@@ -695,6 +699,7 @@ test("interpreter chains states: working -> completed via unguarded transition",
     store: tracker.store,
     taskId: "stub-task",
     invoke: invokeHandler,
+    elicit: noopElicit,
   });
   assert.ok(
     tracker.statusUpdates.some((u) => u.status === "working" && u.statusMessage === "step 1"),
@@ -734,6 +739,7 @@ test("interpreter picks the first matching when: transition", async () => {
     store: tracker.store,
     taskId: "stub-task",
     invoke: invokeHandler,
+    elicit: noopElicit,
   });
   assert.equal(tracker.results[0]!.status, "completed");
   const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
@@ -768,6 +774,7 @@ test("interpreter Mustache-renders the terminal result with input/result/probe",
     store: tracker.store,
     taskId: "stub-task",
     invoke: invokeHandler,
+    elicit: noopElicit,
   });
   const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
   assert.equal(r.content[0]!.text, "input=life answer=42 probe=localhost");
@@ -798,6 +805,7 @@ test("interpreter fails the task when an action returns isError: true", async ()
     store: tracker.store,
     taskId: "stub-task",
     invoke: invokeHandler,
+    elicit: noopElicit,
   });
   assert.equal(tracker.results[0]!.status, "failed");
   const r = tracker.results[0]!.result as { content: Array<{ text: string }>; isError?: boolean };
@@ -830,6 +838,7 @@ test("interpreter fails the task when no transition matches and state has no res
     store: tracker.store,
     taskId: "stub-task",
     invoke: invokeHandler,
+    elicit: noopElicit,
   });
   assert.equal(tracker.results[0]!.status, "failed");
   const r = tracker.results[0]!.result as { content: Array<{ text: string }> };

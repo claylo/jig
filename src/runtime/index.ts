@@ -6,7 +6,7 @@ import { registerResources, startWatchers } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
 import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
-import { interpretWorkflow } from "./tasks.ts";
+import { interpretWorkflow, type ElicitParams, type ElicitResponse } from "./tasks.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
 import { resolveDispatchCase } from "./handlers/dispatch.ts";
 import { configureAccess, isHostAllowed } from "./util/access.ts";
@@ -112,7 +112,7 @@ async function main(): Promise<void> {
         taskSupport: tool.execution!.taskSupport,
       },
       {
-        async createTask(args, store) {
+        async createTask(args, store, elicit) {
           // Two outer-handler shapes:
           //   1. workflow: → kick off interpreter (Phase 6 simple case)
           //   2. dispatch: → resolve case, then either workflow OR sync
@@ -122,6 +122,7 @@ async function main(): Promise<void> {
               outerHandler.workflow.ttl_ms ?? 300_000,
               args,
               store,
+              elicit,
             );
           }
 
@@ -145,6 +146,7 @@ async function main(): Promise<void> {
               caseHandler.workflow.ttl_ms ?? 300_000,
               args,
               store,
+              elicit,
             );
           }
 
@@ -183,6 +185,7 @@ async function main(): Promise<void> {
       ttl_ms: number,
       args: Record<string, unknown>,
       store: Parameters<JigTaskHandler["createTask"]>[1],
+      elicit: (params: unknown) => Promise<unknown>,
     ) {
       const workflow = config.tasks?.[workflowRef];
       if (!workflow) {
@@ -198,6 +201,13 @@ async function main(): Promise<void> {
         store,
         taskId: task.taskId,
         invoke,
+        elicit: async (params: ElicitParams): Promise<ElicitResponse> => {
+          const result = await elicit(params) as { action: string; content?: Record<string, unknown> };
+          return {
+            action: result.action as ElicitResponse["action"],
+            content: result.content,
+          };
+        },
       });
       return { task };
     }
