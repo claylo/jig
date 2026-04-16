@@ -145,6 +145,7 @@ export interface JigTaskHandler {
   createTask(
     args: Record<string, unknown>,
     store: RequestTaskStore,
+    elicit: (params: unknown) => Promise<unknown>,
   ): Promise<CreateTaskResult>;
   getTask(
     taskId: string,
@@ -521,7 +522,7 @@ export function createServer(
         createTask: async (
           args: Record<string, unknown>,
           ctx: CreateTaskServerContext,
-        ) => handler.createTask(args, ctx.task.store),
+        ) => handler.createTask(args, ctx.task.store, ctx.mcpReq.elicitInput as (params: unknown) => Promise<unknown>),
         getTask: async (
           _args: Record<string, unknown>,
           ctx: TaskServerContext,
@@ -569,7 +570,7 @@ export function createServer(
           createTask: async (
             _args: undefined,
             ctx: CreateTaskServerContext,
-          ) => handler.createTask({}, ctx.task.store),
+          ) => handler.createTask({}, ctx.task.store, ctx.mcpReq.elicitInput as (params: unknown) => Promise<unknown>),
           getTask: async (
             _args: undefined,
             ctx: TaskServerContext,

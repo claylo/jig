@@ -472,6 +472,29 @@ export interface InterpreterTaskStore {
   ): Promise<void>;
 }
 
+/**
+ * Jig-owned elicitation request shape. The interpreter builds this from
+ * the state's ElicitationSpec; the adapter in server.ts translates it
+ * to the SDK's ElicitRequestFormParams. Keeps tasks.ts SDK-free.
+ */
+export interface ElicitParams {
+  message: string;
+  requestedSchema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+/**
+ * Jig-owned elicitation response shape. Mirrors the SDK's ElicitResult
+ * but with a narrower content type.
+ */
+export interface ElicitResponse {
+  action: "accept" | "decline" | "cancel";
+  content?: Record<string, unknown>;
+}
+
 export interface InterpretWorkflowOptions {
   workflow: WorkflowSpec;
   args: Record<string, unknown>;
@@ -483,6 +506,7 @@ export interface InterpretWorkflowOptions {
     args: Record<string, unknown>,
     ctx: InvokeContext,
   ) => Promise<ToolCallResult>;
+  elicit: (params: ElicitParams) => Promise<ElicitResponse>;
 }
 
 /**
