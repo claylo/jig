@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseConfig } from "../src/runtime/config.ts";
+import { parseConfig, validateHandlerPublic } from "../src/runtime/config.ts";
+import {
+  validateTasks,
+  interpretWorkflow,
+} from "../src/runtime/tasks.ts";
+import { invoke as invokeHandler } from "../src/runtime/handlers/index.ts";
 
 test("config accepts a tasks: block with a single workflow", () => {
   const yamlText = `
@@ -351,4 +356,227 @@ tools: []
     () => parseConfig(yamlText),
     /tasks\.w\.states\.a\.on\[0\]\.target is required/,
   );
+});
+
+// ─── Interpreter tests ────────────────────────────────────────────────
+
+// Stub task store collecting status updates and the terminal result.
+function makeTrackingStore() {
+  const statusUpdates: Array<{ status: string; statusMessage?: string }> = [];
+  const results: Array<{ status: string; result: unknown }> = [];
+  return {
+    statusUpdates,
+    results,
+    store: {
+      async createTask() {
+        return { taskId: "stub-task", status: "working", createdAt: 0, ttl: 60_000 };
+      },
+      async getTask(taskId: string) {
+        return { taskId, status: statusUpdates.at(-1)?.status ?? "working", createdAt: 0, ttl: 60_000 };
+      },
+      async getTaskResult() {
+        return results.at(-1)?.result;
+      },
+      async storeTaskResult(_taskId: string, status: "completed" | "failed", result: unknown) {
+        results.push({ status, result });
+      },
+      async updateTaskStatus(_taskId: string, status: string, statusMessage?: string) {
+        statusUpdates.push({ status, statusMessage });
+      },
+    },
+  };
+}
+
+test("interpreter runs a single-state workflow that goes straight to a completed terminal", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "done",
+        states: {
+          done: { mcpStatus: "completed", result: { text: "instant" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+  });
+  assert.equal(tracker.results.length, 1);
+  assert.equal(tracker.results[0]!.status, "completed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "instant");
+});
+
+test("interpreter chains states: working -> completed via unguarded transition", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "step1",
+        states: {
+          step1: {
+            mcpStatus: "working",
+            statusMessage: "step 1",
+            actions: [{ inline: { text: "ran step 1" } }],
+            on: [{ target: "done" }],
+          },
+          done: { mcpStatus: "completed", result: { text: "all done" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+  });
+  assert.ok(
+    tracker.statusUpdates.some((u) => u.status === "working" && u.statusMessage === "step 1"),
+    "working status pushed",
+  );
+  assert.equal(tracker.results[0]!.status, "completed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "all done");
+});
+
+test("interpreter picks the first matching when: transition", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "decide",
+        states: {
+          decide: {
+            mcpStatus: "working",
+            actions: [{ inline: { text: '{"valid": true}' } }],
+            on: [
+              { when: { "==": [{ var: "result.valid" }, false] }, target: "rejected" },
+              { when: { "==": [{ var: "result.valid" }, true] }, target: "approved" },
+            ],
+          },
+          approved: { mcpStatus: "completed", result: { text: "approved" } },
+          rejected: { mcpStatus: "failed", result: { text: "rejected" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+  });
+  assert.equal(tracker.results[0]!.status, "completed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "approved");
+});
+
+test("interpreter Mustache-renders the terminal result with input/result/probe", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "compute",
+        states: {
+          compute: {
+            mcpStatus: "working",
+            actions: [{ inline: { text: '{"answer": 42}' } }],
+            on: [{ target: "done" }],
+          },
+          done: {
+            mcpStatus: "completed",
+            result: { text: "input={{input.q}} answer={{result.answer}} probe={{probe.host}}" },
+          },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: { q: "life" },
+    ctx: { connections: {}, probe: { host: "localhost" } },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+  });
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.equal(r.content[0]!.text, "input=life answer=42 probe=localhost");
+});
+
+test("interpreter fails the task when an action returns isError: true", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "boom",
+        states: {
+          boom: {
+            mcpStatus: "working",
+            actions: [{ exec: "false" }], // exits non-zero, becomes isError
+            on: [{ target: "done" }],
+          },
+          done: { mcpStatus: "completed", result: { text: "should not reach" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+  });
+  assert.equal(tracker.results[0]!.status, "failed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }>; isError?: boolean };
+  assert.ok(r.isError);
+  assert.match(r.content[0]!.text, /action.*failed/i);
+});
+
+test("interpreter fails the task when no transition matches and state has no result", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "stuck",
+        states: {
+          stuck: {
+            mcpStatus: "working",
+            actions: [{ inline: { text: "x" } }],
+            on: [{ when: { "==": [1, 0] }, target: "never" }],
+          },
+          never: { mcpStatus: "completed", result: { text: "unreachable" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+  });
+  assert.equal(tracker.results[0]!.status, "failed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }> };
+  assert.match(r.content[0]!.text, /no transition matched/i);
 });

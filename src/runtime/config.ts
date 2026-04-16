@@ -227,13 +227,31 @@ export interface WorkflowSpec {
 /** Top-level tasks: block — workflow definitions keyed by name. */
 export type TasksConfig = Record<string, WorkflowSpec>;
 
+/**
+ * A workflow handler routes a tool call into a named state-machine
+ * workflow declared in the top-level tasks: block. It is task-only —
+ * the tool MUST also declare execution.taskSupport (Phase 6 enforces
+ * the cross-ref). The plain invoke() path in handlers/index.ts rejects
+ * workflow handlers with a clear error so accidental misuse fails loud.
+ *
+ * ttl_ms is the per-task lifetime hint passed to TaskStore.createTask.
+ * Default: 300_000 (5 minutes), matching the SDK example.
+ */
+export interface WorkflowHandler {
+  workflow: {
+    ref: string;
+    ttl_ms?: number;
+  };
+}
+
 export type Handler =
   | InlineHandler
   | ExecHandler
   | DispatchHandler
   | ComputeHandler
   | HttpHandler
-  | GraphqlHandler;
+  | GraphqlHandler
+  | WorkflowHandler;
 
 export interface ToolDefinition {
   name: string;
@@ -548,8 +566,12 @@ function validateHandler(v: unknown, toolName: string): Handler {
     return validateGraphql(h["graphql"], toolName);
   }
 
+  if (h["workflow"] && typeof h["workflow"] === "object") {
+    return validateWorkflowHandler(h["workflow"], toolName);
+  }
+
   throw new Error(
-    `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http, graphql)`,
+    `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http, graphql, workflow)`,
   );
 }
 
@@ -825,5 +847,37 @@ function validateGraphql(v: unknown, toolName: string): GraphqlHandler {
     }
   }
 
+  return out;
+}
+
+function validateWorkflowHandler(v: unknown, toolName: string): WorkflowHandler {
+  if (!v || typeof v !== "object" || Array.isArray(v)) {
+    throw new Error(`config: tools[${toolName}].handler.workflow must be a mapping`);
+  }
+  const w = v as Record<string, unknown>;
+
+  const known = new Set(["ref", "ttl_ms"]);
+  for (const key of Object.keys(w)) {
+    if (!known.has(key)) {
+      throw new Error(
+        `config: tools[${toolName}].handler.workflow: unknown key "${key}"`,
+      );
+    }
+  }
+
+  if (typeof w["ref"] !== "string" || w["ref"].length === 0) {
+    throw new Error(
+      `config: tools[${toolName}].handler.workflow.ref is required and must be a non-empty string`,
+    );
+  }
+  const out: WorkflowHandler = { workflow: { ref: w["ref"] } };
+  if (w["ttl_ms"] !== undefined) {
+    if (typeof w["ttl_ms"] !== "number" || !Number.isFinite(w["ttl_ms"]) || w["ttl_ms"] <= 0) {
+      throw new Error(
+        `config: tools[${toolName}].handler.workflow.ttl_ms must be a positive number`,
+      );
+    }
+    out.workflow.ttl_ms = w["ttl_ms"];
+  }
   return out;
 }
