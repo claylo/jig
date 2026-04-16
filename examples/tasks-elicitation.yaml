@@ -1,0 +1,96 @@
+# A Plan 9 example exercising the elicitation surface.
+# Demonstrates:
+#   - mcpStatus: input_required with an elicitation: block
+#   - Form-mode elicitation (message + schema)
+#   - elicitation response binding in workflowCtx
+#   - JSONLogic guards routing on elicitation.action and elicitation content
+#   - Decline/cancel fallback via elicitation.action guard
+#
+# Run with `just smoke-task-elicitation`. Hermetic — no network, all inline
+# handlers. The elicitation round-trip is simulated by the smoke helper
+# sending an elicitation/create response with action: "accept".
+#
+# Workflow: validating → awaiting_approval (input_required) → approved/rejected.
+# The approval state asks the client for a boolean "approved" field and an
+# optional "reason" string. On accept+approved=true → completing. On
+# accept+approved=false or decline → rejected. On cancel → failed.
+
+server:
+  name: jig-plan9-elicitation
+  version: "1.0.0"
+  description: |
+    Plan 9 example: a deployment approval workflow with elicitation.
+
+tasks:
+  deploy_approval:
+    initial: validating
+
+    states:
+      validating:
+        mcpStatus: working
+        statusMessage: "Validating deployment"
+        actions:
+          - inline:
+              text: '{"valid": true, "target": "production"}'
+        on:
+          - when: { "==": [{ "var": "result.valid" }, false] }
+            target: rejected
+          - target: awaiting_approval
+
+      awaiting_approval:
+        mcpStatus: input_required
+        statusMessage: "Waiting for deployment approval"
+        elicitation:
+          message: "Approve deployment to production?"
+          required: [approved]
+          schema:
+            approved:
+              type: boolean
+              description: "Check to approve this deployment"
+            reason:
+              type: string
+              description: "Optional reason for your decision"
+        on:
+          - when: { "and": [{ "==": [{ "var": "elicitation.action" }, "accept"] }, { "var": "elicitation.approved" }] }
+            target: completing
+          - when: { "==": [{ "var": "elicitation.action" }, "cancel"] }
+            target: failed
+          - target: rejected
+
+      completing:
+        mcpStatus: working
+        statusMessage: "Finalizing deployment"
+        actions:
+          - inline:
+              text: '{"deployed": true}'
+        on:
+          - target: completed
+
+      completed:
+        mcpStatus: completed
+        result:
+          text: "Deployment {{input.deployId}} approved and completed."
+
+      rejected:
+        mcpStatus: failed
+        result:
+          text: "Deployment {{input.deployId}} rejected."
+
+      failed:
+        mcpStatus: failed
+        result:
+          text: "Deployment {{input.deployId}} cancelled."
+
+tools:
+  - name: deploy
+    description: "Run a deployment through the approval workflow."
+    input:
+      deployId:
+        type: string
+        required: true
+    execution:
+      taskSupport: required
+    handler:
+      workflow:
+        ref: deploy_approval
+        ttl_ms: 120000

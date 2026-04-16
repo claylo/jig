@@ -306,3 +306,101 @@ smoke-task-one-tool:
       child.kill();
     '
     echo "smoke-task-one-tool: OK"
+
+# Smoke-task-elicitation: verify the Plan 9 elicitation example boots, the
+# workflow reaches input_required, the elicitation/create request arrives,
+# a form response advances the workflow to completed, and tasks/result
+# returns the rendered terminal text. Requires the client to respond to the
+# elicitation/create server request — the inline node helper simulates this.
+smoke-task-elicitation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    node --experimental-transform-types -e '
+      import { spawn } from "node:child_process";
+      const child = spawn(process.execPath, [
+        "--experimental-transform-types",
+        "src/runtime/index.ts",
+        "--config",
+        "examples/tasks-elicitation.yaml",
+      ], { stdio: ["pipe", "pipe", "pipe"] });
+      child.stderr.on("data", () => {}); // drain stderr
+      const lines = [];
+      let buf = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        buf += chunk;
+        let i;
+        while ((i = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, i).trim();
+          if (line) lines.push(line);
+          buf = buf.slice(i + 1);
+        }
+      });
+      const send = (m) => child.stdin.write(JSON.stringify(m) + "\n");
+      const wait = (pred, timeout = 10000) => new Promise((resolve, reject) => {
+        const start = Date.now();
+        const tick = setInterval(() => {
+          const found = lines.find(pred);
+          if (found) { clearInterval(tick); resolve(found); }
+          else if (Date.now() - start > timeout) { clearInterval(tick); reject(new Error("timeout waiting for: " + pred)); }
+        }, 25);
+      });
+      // 1. Initialize with elicitation capability
+      send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {
+          tasks: { requests: { tools: { call: true } } },
+          elicitation: { form: {} }
+        },
+        clientInfo: { name: "smoke-elicit", version: "0" }
+      } });
+      await wait((l) => l.includes("\"id\":1"));
+      send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      await new Promise((r) => setTimeout(r, 50));
+      // 2. tools/call → task created
+      send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+        name: "deploy",
+        arguments: { deployId: "d-99" },
+        task: { ttl: 120000 }
+      } });
+      const callLine = await wait((l) => l.includes("\"id\":2") && l.includes("\"result\""));
+      const callResp = JSON.parse(callLine);
+      const taskId = callResp.result.task?.taskId;
+      if (!taskId) { console.error("no taskId"); process.exit(1); }
+      // 3. Wait for the elicitation/create request from the server
+      const elicitLine = await wait((l) => l.includes("elicitation/create") && l.includes("requestedSchema"));
+      const elicitReq = JSON.parse(elicitLine);
+      const elicitId = elicitReq.id;
+      if (!elicitId) { console.error("no elicitation request id"); process.exit(1); }
+      // Verify the elicitation has our schema fields
+      const schema = elicitReq.params?.requestedSchema;
+      if (!schema?.properties?.approved) { console.error("missing approved field in schema"); process.exit(1); }
+      // 4. Respond with accept + approved=true
+      send({ jsonrpc: "2.0", id: elicitId, result: {
+        action: "accept",
+        content: { approved: true, reason: "LGTM" }
+      } });
+      // 5. Poll tasks/get until completed
+      let status = "working";
+      let pollId = 3;
+      const startPoll = Date.now();
+      while ((status === "working" || status === "input_required") && Date.now() - startPoll < 10000) {
+        send({ jsonrpc: "2.0", id: pollId, method: "tasks/get", params: { taskId } });
+        const idM = "\"id\":" + pollId;
+        const getLine = await wait((l) => l.includes(idM) && l.includes("\"result\""));
+        status = JSON.parse(getLine).result.status;
+        pollId++;
+        if (status === "working" || status === "input_required") await new Promise((r) => setTimeout(r, 50));
+      }
+      if (status !== "completed") { console.error("task did not complete: " + status); process.exit(1); }
+      // 6. tasks/result
+      send({ jsonrpc: "2.0", id: pollId, method: "tasks/result", params: { taskId } });
+      const idM = "\"id\":" + pollId;
+      const resLine = await wait((l) => l.includes(idM) && l.includes("\"result\""));
+      const finalText = JSON.parse(resLine).result.content[0].text;
+      if (!finalText.includes("d-99")) { console.error("result missing deployId: " + finalText); process.exit(1); }
+      if (!finalText.includes("approved")) { console.error("result missing approved: " + finalText); process.exit(1); }
+      console.log(JSON.stringify({ taskId, status, finalText }, null, 2));
+      child.kill();
+    '
+    echo "smoke-task-elicitation: OK"
