@@ -330,10 +330,8 @@ export function createServer(
     },
     {
       capabilities: {
-        // Accurate up front: a later plan adds YAML hot-reload, which
-        // will call sendToolListChanged(). Pre-declaring the capability
-        // also means `initialize` advertises it even before Phase 4
-        // registers the first tool.
+        // Pre-declared for hot-reload (planned). sendToolListChanged()
+        // will fire when the YAML is reloaded.
         tools: { listChanged: true },
         // Plan 8: always advertise tasks capability with an in-memory
         // store. Tools without execution.taskSupport never reach the

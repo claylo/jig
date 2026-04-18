@@ -45,21 +45,20 @@ function compileOne(def: ConnectionDefinition): CompiledConnection {
   return result;
 }
 
+const headerCache = new WeakMap<CompiledConnection, Record<string, string>>();
+
 /**
  * Resolve a compiled connection's headers to a concrete
- * Record<string, string> for a single request. Evaluates each
- * JSONLogic rule against an empty context — connection-scoped values
- * cannot see tool-call args, by design (args belong to handlers).
- *
- * Null or undefined rule results stringify to "null"/"undefined" per
- * JSONLogic's stringify contract. env.get returns null when the variable
- * is unset or denied by the ADR-0009 allowlist; authors who want fail-
- * closed behavior should assert explicitly (e.g., via jig validate at
- * boot) rather than relying on the header value.
+ * Record<string, string>. Results are cached after first evaluation
+ * because rules evaluate against an empty context — the output is
+ * deterministic for the process lifetime.
  */
 export async function resolveHeaders(
   compiled: CompiledConnection,
 ): Promise<Record<string, string>> {
+  const cached = headerCache.get(compiled);
+  if (cached) return cached;
+
   const out: Record<string, string> = {};
   for (const h of compiled.headers) {
     if (h.kind === "literal") {
@@ -69,5 +68,6 @@ export async function resolveHeaders(
     const val = await evaluate(h.rule, {});
     out[h.name] = stringify(val);
   }
+  headerCache.set(compiled, out);
   return out;
 }

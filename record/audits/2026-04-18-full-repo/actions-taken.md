@@ -2,12 +2,12 @@
 audit: 2026-04-18-Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
 last_updated: 2026-04-18
 status:
-  fixed: 21
+  fixed: 23
   mitigated: 0
-  accepted: 0
+  accepted: 1
   disputed: 0
-  deferred: 0
-  open: 8
+  deferred: 4
+  open: 1
 ---
 
 # Actions Taken: Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
@@ -68,7 +68,63 @@ Extracted `stringify()` to `util/stringify.ts` (3 identical copies removed). Mov
 
 **Disposition:** fixed
 **Addresses:** [unbounded-http-response-body](README.md#unbounded-http-response-body), [default-env-allowlist-exposes-path](README.md#default-env-allowlist-exposes-path), [response-mode-synonym](README.md#response-mode-synonym), [security-validation-copy-paste](README.md#security-validation-copy-paste), [probe-handler-not-deep-validated](README.md#probe-handler-not-deep-validated), [when-guards-skipped-in-task-dispatch-fusion](README.md#when-guards-skipped-in-task-dispatch-fusion)
-**Commit:** (pending — this branch)
+**Commit:** 6eb1400
 **Author:** Clay Loveless + Claude
 
 Added 10 MB response body size limit via streaming reader in `performFetch`, preventing unbounded memory growth. Removed `PATH` from default env allowlist. Unified graphql response mode to `"body" | "envelope"` matching http, accepting `"data"` as a deprecated alias. Extracted `validateSecurityBlock()` to replace three identical allow-array validation blocks. Validated probe handlers through `validateHandlerPublic` at parse time. Evaluated `when:` guards in the task-dispatch fusion path, closing the bypass where guarded workflow cases skipped the guard under task-tool fusion.
+
+---
+
+## 2026-04-18 — Cache connection headers, expose exec maxBuffer, disposition remaining
+
+**Disposition:** fixed
+**Addresses:** [connection-headers-re-evaluated-per-request](README.md#connection-headers-re-evaluated-per-request), [exec-stdout-default-maxbuffer](README.md#exec-stdout-default-maxbuffer)
+**Commit:** (pending — this branch)
+**Author:** Clay Loveless + Claude
+
+Cache resolved connection headers after first evaluation via WeakMap. Rules evaluate against an empty context so the result is deterministic for the process lifetime. Added optional `max_output_bytes` field to exec handler config (defaults to 1 MB, matching Node.js). Kept `tools.listChanged: true` capability — hot-reload is planned.
+
+---
+
+## 2026-04-18 — tools-list-changed: accepted (hot-reload planned)
+
+**Disposition:** accepted
+**Addresses:** [tools-list-changed-advertised-never-fired](README.md#tools-list-changed-advertised-never-fired)
+
+The `listChanged: true` capability is pre-declared intentionally. Hot-reload is a planned feature that will fire `sendToolListChanged()` when the YAML is reloaded. Well-behaved clients handle the capability silently until the notification fires. Updated comment to document intent.
+
+---
+
+## 2026-04-18 — mcp-server-pinned-alpha: deferred to SDK stable release
+
+**Disposition:** deferred
+**Addresses:** [mcp-server-pinned-alpha](README.md#mcp-server-pinned-alpha)
+
+The `@modelcontextprotocol/server` pin at exact `2.0.0-alpha.2` is intentional during alpha. Switch to `^2.0.0` when a stable 2.0.0 ships. Target: SDK 2.0.0 stable release.
+
+---
+
+## 2026-04-18 — no-user-facing-documentation: deferred to next session
+
+**Disposition:** deferred
+**Addresses:** [no-user-facing-documentation](README.md#no-user-facing-documentation)
+
+README and user-facing documentation requires a dedicated session to assemble content from design docs, example comments, and the YAML schema reference. Target: documentation session.
+
+---
+
+## 2026-04-18 — cli-surface-not-implemented: deferred to Plan 10
+
+**Disposition:** deferred
+**Addresses:** [cli-surface-not-implemented](README.md#cli-surface-not-implemented)
+
+The six CLI commands (jig new/dev/validate/build/serve/inspect) are Plan 10 scope. Target: Plan 10 implementation.
+
+---
+
+## 2026-04-18 — stdio-only-transport: deferred to Streamable HTTP implementation
+
+**Disposition:** deferred
+**Addresses:** [stdio-only-transport](README.md#stdio-only-transport)
+
+Streamable HTTP transport is planned. The server.ts adapter already accepts a Transport interface, so the implementation is additive. Target: transport implementation session.
