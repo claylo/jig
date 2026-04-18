@@ -541,14 +541,35 @@ function validateTools(v: unknown): ToolDefinition[] {
   if (!Array.isArray(v)) {
     throw new Error("config: tools must be an array");
   }
-  return v.map((entry, i) => validateTool(entry, i));
+  const seenNames = new Set<string>();
+  return v.map((entry, i) => {
+    const tool = validateTool(entry, i);
+    if (seenNames.has(tool.name)) {
+      throw new Error(`config: tools: duplicate tool name "${tool.name}"`);
+    }
+    seenNames.add(tool.name);
+    return tool;
+  });
 }
+
+const VALID_INPUT_TYPES = new Set([
+  "string", "integer", "number", "boolean", "object", "array",
+]);
+
+const TOOL_KNOWN_KEYS = new Set([
+  "name", "description", "input", "handler", "transform", "execution",
+]);
 
 function validateTool(entry: unknown, index: number): ToolDefinition {
   if (!entry || typeof entry !== "object") {
     throw new Error(`config: tools[${index}] must be a mapping`);
   }
   const t = entry as Record<string, unknown>;
+  for (const key of Object.keys(t)) {
+    if (!TOOL_KNOWN_KEYS.has(key)) {
+      throw new Error(`config: tools[${index}]: unknown key "${key}"`);
+    }
+  }
   if (typeof t["name"] !== "string" || t["name"].length === 0) {
     throw new Error(`config: tools[${index}].name is required`);
   }
@@ -621,6 +642,11 @@ function validateInput(
     const s = schema as Record<string, unknown>;
     if (typeof s["type"] !== "string") {
       throw new Error(`config: tools[${toolName}].input.${field}.type is required`);
+    }
+    if (!VALID_INPUT_TYPES.has(s["type"])) {
+      throw new Error(
+        `config: tools[${toolName}].input.${field}.type must be one of ${[...VALID_INPUT_TYPES].join(", ")} (got "${s["type"]}")`,
+      );
     }
     out[field] = {
       type: s["type"] as InputFieldSchema["type"],
