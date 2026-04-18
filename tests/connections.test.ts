@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { parseConfig } from "../src/runtime/config.ts";
 import { compileConnections, resolveHeaders } from "../src/runtime/connections.ts";
 import { configureAccess, resetAccessForTests } from "../src/runtime/util/access.ts";
-// Side-effect import: registers helpers (env.get, etc.) on the shared engine.
-import "../src/runtime/util/helpers.ts";
+// Helpers register at module load time inside jsonlogic.ts.
 
 test("config parses a connections: block and expands ${VAR} in headers", () => {
   const yamlText = `

@@ -1,5 +1,6 @@
 import type { ToolCallResult } from "../handlers/types.ts";
 import { evaluate, type JsonLogicRule } from "./jsonlogic.ts";
+import { stringify } from "./stringify.ts";
 
 /**
  * Tool-level response reshaping.
@@ -52,11 +53,4 @@ function tryParseJson(text: string): unknown {
   } catch {
     return text;
   }
-}
-
-function stringify(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
 }

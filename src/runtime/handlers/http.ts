@@ -1,9 +1,9 @@
 import type { HttpHandler } from "../config.ts";
-import type { ToolCallResult, InvokeContext } from "./types.ts";
+import { errorResult, type ToolCallResult, type InvokeContext } from "./types.ts";
 import type { CompiledConnection } from "../connections.ts";
 import { resolveHeaders } from "../connections.ts";
 import { performFetch } from "../util/fetch.ts";
-import { render } from "../util/template.ts";
+import { render, renderJsonLeaves } from "../util/template.ts";
 
 /**
  * Invoke an http handler. Composition order:
@@ -100,23 +100,3 @@ export async function invokeHttp(
   return performFetch(fetchReq);
 }
 
-/**
- * Walk a body mapping and render Mustache in every string leaf against
- * `data`. Non-strings pass through.
- */
-function renderJsonLeaves(value: unknown, data: Record<string, unknown>): unknown {
-  if (typeof value === "string") return render(value, data);
-  if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, data));
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = renderJsonLeaves(v, data);
-    }
-    return out;
-  }
-  return value;
-}
-
-function errorResult(text: string): ToolCallResult {
-  return { content: [{ type: "text", text }], isError: true };
-}

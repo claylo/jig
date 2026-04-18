@@ -1,6 +1,7 @@
 import type { ComputeHandler } from "../config.ts";
 import type { ToolCallResult, InvokeContext } from "./types.ts";
 import { evaluate } from "../util/jsonlogic.ts";
+import { stringify } from "../util/stringify.ts";
 
 /**
  * Pure JSONLogic handler. Evaluates the compute rule against the tool
@@ -36,11 +37,4 @@ export async function invokeCompute(
       isError: true,
     };
   }
-}
-
-function stringify(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
 }

@@ -1,5 +1,5 @@
 import { isHostAllowed } from "./access.ts";
-import type { ToolCallResult } from "../handlers/types.ts";
+import { errorResult, type ToolCallResult } from "../handlers/types.ts";
 
 export interface FetchRequest {
   method: string;
@@ -107,8 +107,4 @@ export async function performFetch(req: FetchRequest): Promise<ToolCallResult> {
     );
   }
   return { content: [{ type: "text", text: bodyText }] };
-}
-
-function errorResult(text: string): ToolCallResult {
-  return { content: [{ type: "text", text }], isError: true };
 }

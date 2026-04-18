@@ -4,8 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform as nodePlatform, arch as nodeArch, homedir, tmpdir } from "node:os";
 import { evaluate, type JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
-// Side-effect import: registers the 16 helpers on the shared engine.
-import "../src/runtime/util/helpers.ts";
+// Helpers register at module load time inside jsonlogic.ts.
 import { configureAccess } from "../src/runtime/util/access.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));

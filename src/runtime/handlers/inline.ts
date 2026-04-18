@@ -1,8 +1,6 @@
 import type { InlineHandler } from "../config.ts";
 import type { ToolCallResult } from "./types.ts";
 
-export type { ToolCallResult };
-
 /**
  * The inert handler. Returns `handler.inline.text` verbatim — no
  * Mustache rendering, no tool-arg interpolation, no resource template

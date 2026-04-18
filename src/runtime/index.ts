@@ -13,10 +13,10 @@ import { configureAccess, isHostAllowed } from "./util/access.ts";
 import { applyTransform } from "./util/transform.ts";
 import { compileConnections } from "./connections.ts";
 import { resolveProbes } from "./probes.ts";
-// Side-effect: registers the 16 built-in JSONLogic helpers per ADR-0008.
-// Keeps registration centralized at runtime boot rather than deferred
-// until a compute/when/transform rule triggers a helper lookup.
-import "./util/helpers.ts";
+// Side-effect: importing jsonlogic.ts registers the 16 built-in helpers
+// per ADR-0008. Any module that imports evaluate() triggers this, but
+// this explicit import documents the dependency for boot sequencing.
+import "./util/jsonlogic.ts";
 
 async function main(): Promise<void> {
   const configPath = resolveConfigPath({

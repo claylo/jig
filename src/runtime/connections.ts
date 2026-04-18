@@ -1,5 +1,6 @@
 import type { ConnectionsConfig, ConnectionDefinition } from "./config.ts";
 import { evaluate, type JsonLogicRule } from "./util/jsonlogic.ts";
+import { stringify } from "./util/stringify.ts";
 
 /**
  * A compiled connection — URL + timeout_ms resolved at boot; headers
@@ -69,11 +70,4 @@ export async function resolveHeaders(
     out[h.name] = stringify(val);
   }
   return out;
-}
-
-function stringify(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
 }

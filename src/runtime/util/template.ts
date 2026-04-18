@@ -41,7 +41,18 @@ function stringify(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
-  // Objects and arrays: JSON encoding. Authors who want a custom format
-  // should pre-compute it before handing args to the renderer.
   return JSON.stringify(value);
+}
+
+export function renderJsonLeaves(value: unknown, data: Record<string, unknown>): unknown {
+  if (typeof value === "string") return render(value, data);
+  if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, data));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = renderJsonLeaves(v, data);
+    }
+    return out;
+  }
+  return value;
 }
