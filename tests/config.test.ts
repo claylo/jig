@@ -113,6 +113,49 @@ tools:
   assert.throws(() => parseConfig(yaml), /exec\[1\] must be a string/);
 });
 
+test("parseConfig rejects duplicate tool names", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: echo
+    description: first
+    handler:
+      exec: "/bin/echo first"
+  - name: echo
+    description: second
+    handler:
+      exec: "/bin/echo second"
+`;
+  assert.throws(() => parseConfig(yaml), /duplicate tool name "echo"/);
+});
+
+test("parseConfig rejects unknown keys in tool entry", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: echo
+    description: echoes
+    gaurd: true
+    handler:
+      exec: "/bin/echo hello"
+`;
+  assert.throws(() => parseConfig(yaml), /unknown key "gaurd"/);
+});
+
+test("parseConfig rejects invalid input field type", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: echo
+    description: echoes
+    input:
+      msg: { type: strinng }
+    handler:
+      exec: "/bin/echo {{msg}}"
+`;
+  assert.throws(() => parseConfig(yaml), /type must be one of.*got "strinng"/);
+});
+
 test("parseConfig accepts a dispatcher tool", () => {
   const yaml = `
 server: { name: d, version: "0.1.0" }
