@@ -1,0 +1,500 @@
+---
+meta:
+  project: jig
+  commit: d825be6546b4291dba1d8bf85b390b295004e89d
+  timestamp: "2026-04-18T12:00:00-04:00"
+  scope: "Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples"
+
+structure:
+  root: /Users/clay/source/claylo/jig
+  total_files: 26
+  total_lines: 5149
+  languages:
+    - language: TypeScript
+      files: 26
+      lines: 5149
+      percentage: 100.0
+
+  modules:
+    - name: config
+      path: src/runtime/config.ts
+      files: 1
+      lines: 993
+      entry_points:
+        - name: loadConfigFromFile
+          path: src/runtime/config.ts
+          line: 1
+          kind: public_fn
+        - name: resolveConfigPath
+          path: src/runtime/config.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: probes
+          weight: 1
+        - target: resources
+          weight: 1
+        - target: prompts
+          weight: 1
+        - target: completions
+          weight: 1
+        - target: tasks
+          weight: 1
+        - target: access
+          weight: 1
+        - target: jsonlogic
+          weight: 1
+        - target: interpolate
+          weight: 1
+
+    - name: tasks
+      path: src/runtime/tasks.ts
+      files: 1
+      lines: 746
+      entry_points:
+        - name: interpretWorkflow
+          path: src/runtime/tasks.ts
+          line: 1
+          kind: public_fn
+        - name: validateTasks
+          path: src/runtime/tasks.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: server
+          weight: 1
+        - target: handlers
+          weight: 1
+        - target: jsonlogic
+          weight: 1
+        - target: template
+          weight: 1
+
+    - name: server
+      path: src/runtime/server.ts
+      files: 1
+      lines: 589
+      entry_points:
+        - name: createServer
+          path: src/runtime/server.ts
+          line: 1
+          kind: public_fn
+      dependencies: []
+
+    - name: resources
+      path: src/runtime/resources.ts
+      files: 1
+      lines: 410
+      entry_points:
+        - name: registerResources
+          path: src/runtime/resources.ts
+          line: 1
+          kind: public_fn
+        - name: startWatchers
+          path: src/runtime/resources.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 1
+        - target: server
+          weight: 1
+        - target: handlers
+          weight: 1
+        - target: access
+          weight: 1
+
+    - name: access
+      path: src/runtime/util/access.ts
+      files: 1
+      lines: 275
+      entry_points:
+        - name: configureAccess
+          path: src/runtime/util/access.ts
+          line: 1
+          kind: public_fn
+        - name: isHostAllowed
+          path: src/runtime/util/access.ts
+          line: 1
+          kind: public_fn
+        - name: isPathAllowed
+          path: src/runtime/util/access.ts
+          line: 1
+          kind: public_fn
+        - name: isEnvAllowed
+          path: src/runtime/util/access.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 1
+
+    - name: index
+      path: src/runtime/index.ts
+      files: 1
+      lines: 255
+      entry_points:
+        - name: main
+          path: src/runtime/index.ts
+          line: 1
+          kind: main
+      dependencies:
+        - target: config
+          weight: 1
+        - target: server
+          weight: 1
+        - target: resources
+          weight: 1
+        - target: prompts
+          weight: 1
+        - target: handlers
+          weight: 1
+        - target: tools
+          weight: 1
+        - target: tasks
+          weight: 1
+        - target: connections
+          weight: 1
+        - target: probes
+          weight: 1
+        - target: access
+          weight: 1
+        - target: transform
+          weight: 1
+        - target: dispatch
+          weight: 1
+        - target: helpers
+          weight: 1
+
+    - name: probes
+      path: src/runtime/probes.ts
+      files: 1
+      lines: 221
+      entry_points:
+        - name: resolveProbes
+          path: src/runtime/probes.ts
+          line: 1
+          kind: public_fn
+        - name: validateProbes
+          path: src/runtime/probes.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 1
+        - target: jsonlogic
+          weight: 1
+        - target: connections
+          weight: 1
+        - target: handlers
+          weight: 1
+
+    - name: helpers
+      path: src/runtime/util/helpers.ts
+      files: 1
+      lines: 207
+      entry_points:
+        - name: registerBuiltinOperators
+          path: src/runtime/util/helpers.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: jsonlogic
+          weight: 1
+        - target: access
+          weight: 1
+
+    - name: prompts
+      path: src/runtime/prompts.ts
+      files: 1
+      lines: 195
+      entry_points:
+        - name: registerPrompts
+          path: src/runtime/prompts.ts
+          line: 1
+          kind: public_fn
+        - name: validatePrompts
+          path: src/runtime/prompts.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 1
+        - target: handlers
+          weight: 1
+        - target: template
+          weight: 1
+
+    - name: completions
+      path: src/runtime/completions.ts
+      files: 1
+      lines: 174
+      entry_points:
+        - name: wireCompletions
+          path: src/runtime/completions.ts
+          line: 1
+          kind: public_fn
+        - name: validateCompletions
+          path: src/runtime/completions.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 1
+
+    - name: handlers
+      path: src/runtime/handlers/
+      files: 8
+      lines: 571
+      entry_points:
+        - name: invoke
+          path: src/runtime/handlers/index.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 6
+        - target: connections
+          weight: 2
+        - target: fetch
+          weight: 2
+        - target: template
+          weight: 3
+        - target: jsonlogic
+          weight: 2
+
+    - name: connections
+      path: src/runtime/connections.ts
+      files: 1
+      lines: 79
+      entry_points:
+        - name: compileConnections
+          path: src/runtime/connections.ts
+          line: 1
+          kind: public_fn
+        - name: resolveHeaders
+          path: src/runtime/connections.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 1
+        - target: jsonlogic
+          weight: 1
+
+    - name: tools
+      path: src/runtime/tools.ts
+      files: 1
+      lines: 69
+      entry_points:
+        - name: toolToInputSchema
+          path: src/runtime/tools.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: config
+          weight: 1
+
+    - name: interpolate
+      path: src/runtime/util/interpolate.ts
+      files: 1
+      lines: 74
+      entry_points:
+        - name: expandShimInTree
+          path: src/runtime/util/interpolate.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: jsonlogic
+          weight: 1
+
+    - name: transform
+      path: src/runtime/util/transform.ts
+      files: 1
+      lines: 62
+      entry_points:
+        - name: applyTransform
+          path: src/runtime/util/transform.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: jsonlogic
+          weight: 1
+
+    - name: jsonlogic
+      path: src/runtime/util/jsonlogic.ts
+      files: 1
+      lines: 53
+      entry_points:
+        - name: evaluate
+          path: src/runtime/util/jsonlogic.ts
+          line: 1
+          kind: public_fn
+        - name: getEngine
+          path: src/runtime/util/jsonlogic.ts
+          line: 1
+          kind: public_fn
+      dependencies: []
+
+    - name: template
+      path: src/runtime/util/template.ts
+      files: 1
+      lines: 47
+      entry_points:
+        - name: render
+          path: src/runtime/util/template.ts
+          line: 1
+          kind: public_fn
+      dependencies: []
+
+    - name: fetch
+      path: src/runtime/util/fetch.ts
+      files: 1
+      lines: 105
+      entry_points:
+        - name: performFetch
+          path: src/runtime/util/fetch.ts
+          line: 1
+          kind: public_fn
+      dependencies:
+        - target: access
+          weight: 1
+
+    - name: stdio
+      path: src/runtime/transports/stdio.ts
+      files: 1
+      lines: 17
+      entry_points:
+        - name: createStdioTransport
+          path: src/runtime/transports/stdio.ts
+          line: 1
+          kind: public_fn
+      dependencies: []
+
+dependencies:
+  manifest: package.json
+  items:
+    - name: "@cfworker/json-schema"
+      version: "^4.1.1"
+      kind: direct
+    - name: "@modelcontextprotocol/server"
+      version: "2.0.0-alpha.2"
+      kind: direct
+    - name: json-logic-engine
+      version: "^5.0.0"
+      kind: direct
+    - name: yaml
+      version: "^2.8.3"
+      kind: direct
+    - name: "@types/node"
+      version: "^25.6.0"
+      kind: dev
+    - name: typescript
+      version: "^6.0.2"
+      kind: dev
+
+churn:
+  period: "last 1 month (project age: 4 days, started 2026-04-14)"
+  hotspots:
+    - path: src/runtime/config.ts
+      commits: 22
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22]
+    - path: src/runtime/index.ts
+      commits: 18
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 18]
+    - path: src/runtime/server.ts
+      commits: 12
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12]
+    - path: src/runtime/tasks.ts
+      commits: 5
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+    - path: src/runtime/resources.ts
+      commits: 5
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+    - path: src/runtime/handlers/index.ts
+      commits: 6
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6]
+    - path: src/runtime/util/access.ts
+      commits: 4
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+    - path: src/runtime/handlers/dispatch.ts
+      commits: 4
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+    - path: src/runtime/probes.ts
+      commits: 3
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+    - path: src/runtime/prompts.ts
+      commits: 2
+      authors: 1
+      last_touched: "2026-04-18"
+      monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+
+  recent_activity:
+    total_commits: 77
+    active_authors: 1
+    files_changed: 115
+
+testing:
+  runner: just
+  command: just test
+  sources:
+    - justfile
+    - package.json
+  notes: >
+    `npm test` runs `node --test --experimental-transform-types 'tests/**/*.test.ts'`.
+    18 test files with 6914 lines of tests. Tests use Node.js built-in test runner.
+    Multiple smoke recipes in justfile exercise each example YAML end-to-end.
+
+boundaries:
+  - name: exec_handler
+    description: "Handler that spawns child processes via execFile"
+    modules: [handlers]
+    notes: "Primary shell execution surface — user-controlled command + args via YAML config"
+
+  - name: http_graphql_fetch
+    description: "Handlers that perform network requests to user-specified URLs"
+    modules: [handlers, fetch]
+    notes: "SSRF risk if URL comes from tool arguments without host allowlist enforcement"
+
+  - name: filesystem_access
+    description: "Resource handlers that read files and watchers that observe filesystem changes"
+    modules: [resources, access, helpers]
+    notes: "Path traversal risk if resource URIs or watcher paths are user-controlled"
+
+  - name: yaml_config_parsing
+    description: "YAML config loading and validation — the entire server definition is untrusted YAML"
+    modules: [config, interpolate]
+    notes: "Config defines tools, handlers, security policy — controls what the server can do"
+
+  - name: jsonlogic_evaluation
+    description: "JsonLogic rules evaluated at runtime for guards, transforms, dispatch, and interpolation"
+    modules: [jsonlogic, helpers, connections, handlers, tasks, probes, interpolate]
+    notes: "Custom operators expose env vars, filesystem stat, PATH access — powerful evaluation surface"
+
+  - name: template_rendering
+    description: "Mustache-style template rendering with user arguments injected"
+    modules: [template, handlers, prompts, tasks]
+    notes: "Template injection if argument values contain mustache syntax"
+
+  - name: task_state_machine
+    description: "Workflow interpreter that drives multi-step tasks with state transitions"
+    modules: [tasks]
+    notes: "State machine transitions, elicitation flow, TTL enforcement"
