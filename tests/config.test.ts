@@ -76,6 +76,43 @@ tools:
   assert.deepEqual(config.tools[0]!.handler, { exec: "/bin/echo hello" });
 });
 
+test("parseConfig accepts exec handler as array of strings", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: runner
+    description: runs a script
+    handler:
+      exec: ["/bin/echo", "hello", "world"]
+`;
+  const config = parseConfig(yaml);
+  assert.deepEqual(config.tools[0]!.handler, { exec: ["/bin/echo", "hello", "world"] });
+});
+
+test("parseConfig rejects empty exec array", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: runner
+    description: runs a script
+    handler:
+      exec: []
+`;
+  assert.throws(() => parseConfig(yaml), /exec array must not be empty/);
+});
+
+test("parseConfig rejects exec array with non-string element", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: runner
+    description: runs a script
+    handler:
+      exec: ["/bin/echo", 42]
+`;
+  assert.throws(() => parseConfig(yaml), /exec\[1\] must be a string/);
+});
+
 test("parseConfig accepts a dispatcher tool", () => {
   const yaml = `
 server: { name: d, version: "0.1.0" }

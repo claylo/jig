@@ -7,8 +7,16 @@ import { render } from "../util/template.ts";
 const execFileAsync = promisify(execFile);
 
 /**
- * Run a shell-style command by rendering its template through Mustache,
- * whitespace-splitting into argv, and invoking `child_process.execFile`.
+ * Run a command by rendering its template through Mustache and invoking
+ * `child_process.execFile`.
+ *
+ * Two forms:
+ *   - `exec: "git log --oneline {{count}}"` (string) — legacy form,
+ *     whitespace-splits the rendered string into argv. Susceptible to
+ *     argument injection when template variables contain spaces.
+ *   - `exec: ["git", "log", "--oneline", "{{count}}"]` (array) — each
+ *     element is rendered independently and becomes exactly one argv
+ *     entry regardless of content, eliminating argument injection.
  *
  * Explicitly not a shell: `shell: true` is never set, so pipes,
  * redirects, and environment variable expansion inside the command
@@ -24,11 +32,20 @@ export async function invokeExec(
   args: Record<string, unknown>,
   ctx: InvokeContext,
 ): Promise<ToolCallResult> {
-  const rendered = render(handler.exec, { ...args, probe: ctx.probe });
-  const argv = rendered.trim().split(/\s+/).filter((part) => part.length > 0);
+  const templateCtx = { ...args, probe: ctx.probe };
+  let argv: string[];
 
-  if (argv.length === 0) {
-    return errorResult(`exec: empty command after template render: "${handler.exec}"`);
+  if (Array.isArray(handler.exec)) {
+    argv = handler.exec.map((part) => render(part, templateCtx));
+    if (argv.length === 0) {
+      return errorResult("exec: empty command array");
+    }
+  } else {
+    const rendered = render(handler.exec, templateCtx);
+    argv = rendered.trim().split(/\s+/).filter((part) => part.length > 0);
+    if (argv.length === 0) {
+      return errorResult(`exec: empty command after template render: "${handler.exec}"`);
+    }
   }
 
   const [command, ...commandArgs] = argv;
