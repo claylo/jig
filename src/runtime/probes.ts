@@ -69,10 +69,25 @@ function validateProbeEntry(e: Record<string, unknown>, name: string): ProbeSpec
   // shape check here because it's a leaf.
   let handler: ProbeSpec["handler"];
   if (e["exec"] !== undefined) {
-    if (typeof e["exec"] !== "string" || e["exec"].length === 0) {
-      throw new Error(`config: probes.${name}.exec must be a non-empty string`);
+    if (typeof e["exec"] === "string") {
+      if (e["exec"].length === 0) {
+        throw new Error(`config: probes.${name}.exec must be a non-empty string`);
+      }
+      handler = { exec: e["exec"] };
+    } else if (Array.isArray(e["exec"])) {
+      const arr = e["exec"] as unknown[];
+      if (arr.length === 0) {
+        throw new Error(`config: probes.${name}.exec array must not be empty`);
+      }
+      for (let i = 0; i < arr.length; i++) {
+        if (typeof arr[i] !== "string") {
+          throw new Error(`config: probes.${name}.exec[${i}] must be a string`);
+        }
+      }
+      handler = { exec: arr as string[] };
+    } else {
+      throw new Error(`config: probes.${name}.exec must be a non-empty string or array of strings`);
     }
-    handler = { exec: e["exec"] };
   } else if (e["graphql"] !== undefined) {
     if (!e["graphql"] || typeof e["graphql"] !== "object") {
       throw new Error(`config: probes.${name}.graphql must be a mapping`);

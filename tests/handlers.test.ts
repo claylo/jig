@@ -72,6 +72,36 @@ test("invokeExec rejects empty command after render as isError", async () => {
   assert.match(result.content[0]!.text, /empty|no command/i);
 });
 
+test("invokeExec array form: each element becomes one argv entry", async () => {
+  const result = await invokeExec(
+    { exec: ["/bin/echo", "hello world"] },
+    {},
+    emptyCtx,
+  );
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content[0]!.text, "hello world\n");
+});
+
+test("invokeExec array form: renders templates per element without splitting", async () => {
+  const result = await invokeExec(
+    { exec: ["/bin/echo", "{{value}}"] },
+    { value: "has spaces in it" },
+    emptyCtx,
+  );
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content[0]!.text, "has spaces in it\n");
+});
+
+test("invokeExec array form: argument injection via spaces is neutralized", async () => {
+  const result = await invokeExec(
+    { exec: ["/bin/echo", "{{input}}"] },
+    { input: "--flag injected" },
+    emptyCtx,
+  );
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content[0]!.text, "--flag injected\n");
+});
+
 // Minimal test-local invoke: types against the actual Handler union so
 // the stub stays valid when Phase 4 widens the union. Supports inline
 // only; Phase 4 replaces this stub call with the real invoke().

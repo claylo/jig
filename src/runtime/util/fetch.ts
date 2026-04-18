@@ -70,7 +70,16 @@ export async function performFetch(req: FetchRequest): Promise<ToolCallResult> {
     return errorResult(`http: ${msg}`);
   }
 
-  const bodyText = await response.text();
+  let bodyText: string;
+  try {
+    bodyText = await response.text();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (signal.aborted) {
+      return errorResult(`http: timeout reading response body after ${timeout}ms`);
+    }
+    return errorResult(`http: failed reading response body: ${msg}`);
+  }
 
   if (req.responseMode === "envelope") {
     const headers: Record<string, string> = {};

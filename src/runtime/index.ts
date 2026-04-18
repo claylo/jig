@@ -173,7 +173,9 @@ async function main(): Promise<void> {
           return t;
         },
         async getTaskResult(taskId, store) {
-          return (await store.getTaskResult(taskId)) as CallToolResult;
+          const r = await store.getTaskResult(taskId);
+          if (!r) throw new Error(`tasks/get: result for task "${taskId}" not found`);
+          return r as CallToolResult;
         },
       },
     );
@@ -194,7 +196,7 @@ async function main(): Promise<void> {
         );
       }
       const task = await store.createTask({ ttl: ttl_ms });
-      void interpretWorkflow({
+      interpretWorkflow({
         workflow,
         args,
         ctx,
@@ -208,6 +210,13 @@ async function main(): Promise<void> {
             content: result.content,
           };
         },
+      }).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`jig: workflow "${workflowRef}" crashed: ${message}\n`);
+        store.storeTaskResult(task.taskId, "failed", {
+          content: [{ type: "text", text: `workflow "${workflowRef}" crashed: ${message}` }],
+          isError: true,
+        }).catch(() => {});
       });
       return { task };
     }

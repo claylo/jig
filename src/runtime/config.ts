@@ -47,7 +47,7 @@ export interface InlineHandler {
 }
 
 export interface ExecHandler {
-  exec: string;
+  exec: string | string[];
 }
 
 export interface DispatchCase {
@@ -102,7 +102,7 @@ export interface GraphqlHandler {
  * exec are accepted (inline / compute / dispatch are nonsensical at
  * boot — see Plan 5 design doc).
  */
-export type ProbeHandler = GraphqlHandler | HttpHandler | { exec: string };
+export type ProbeHandler = GraphqlHandler | HttpHandler | { exec: string | string[] };
 
 export interface ProbeSpec {
   handler: ProbeHandler;
@@ -655,6 +655,23 @@ function validateHandler(v: unknown, toolName: string): Handler {
       );
     }
     return { exec: h["exec"] };
+  }
+
+  if (Array.isArray(h["exec"])) {
+    const arr = h["exec"] as unknown[];
+    if (arr.length === 0) {
+      throw new Error(
+        `config: tools[${toolName}].handler.exec array must not be empty`,
+      );
+    }
+    for (let i = 0; i < arr.length; i++) {
+      if (typeof arr[i] !== "string") {
+        throw new Error(
+          `config: tools[${toolName}].handler.exec[${i}] must be a string`,
+        );
+      }
+    }
+    return { exec: arr as string[] };
   }
 
   if (h["dispatch"] && typeof h["dispatch"] === "object") {
