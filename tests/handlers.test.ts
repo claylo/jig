@@ -9,8 +9,7 @@ import { applyTransform } from "../src/runtime/util/transform.ts";
 import type { DispatchHandler, Handler, ComputeHandler } from "../src/runtime/config.ts";
 import type { ToolCallResult, InvokeContext } from "../src/runtime/handlers/types.ts";
 import type { JsonLogicRule } from "../src/runtime/util/jsonlogic.ts";
-// Side-effect: ensures helpers are registered before the compute tests run.
-import "../src/runtime/util/helpers.ts";
+// Helpers register at module load time inside jsonlogic.ts.
 import { configureAccess, resetAccessForTests } from "../src/runtime/util/access.ts";
 import { invokeHttp } from "../src/runtime/handlers/http.ts";
 import { invokeGraphql } from "../src/runtime/handlers/graphql.ts";

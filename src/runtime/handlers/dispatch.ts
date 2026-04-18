@@ -1,5 +1,5 @@
 import type { DispatchCase, DispatchHandler, Handler } from "../config.ts";
-import type { ToolCallResult } from "./types.ts";
+import { errorResult, type ToolCallResult } from "./types.ts";
 import { evaluate } from "../util/jsonlogic.ts";
 
 /** Result of resolving a dispatch handler against runtime args. */
@@ -116,11 +116,4 @@ export async function invokeDispatch(
   }
 
   return invoke(matched.handler, args);
-}
-
-function errorResult(message: string): ToolCallResult {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
 }

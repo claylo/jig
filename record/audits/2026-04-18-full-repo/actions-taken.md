@@ -2,12 +2,12 @@
 audit: 2026-04-18-Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
 last_updated: 2026-04-18
 status:
-  fixed: 7
+  fixed: 10
   mitigated: 0
   accepted: 0
   disputed: 0
   deferred: 0
-  open: 22
+  open: 19
 ---
 
 # Actions Taken: Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
@@ -37,3 +37,16 @@ The detached `void interpretWorkflow(...)` promise now has a `.catch()` handler 
 **Author:** Clay Loveless + Claude
 
 Tool entries now reject unknown keys using the same pattern as every other config block, so a YAML author writing `gaurd:` instead of `guard:` gets a clear parse-time error. `InputFieldSchema.type` is validated against the six allowed values (`string`, `integer`, `number`, `boolean`, `object`, `array`) instead of accepting any string via an unchecked cast. Tool names are tracked with a `seenNames` set matching the pattern in `validatePrompts`, rejecting duplicates at parse time.
+
+---
+
+## 2026-04-18 — Require config version field, log workflow error paths
+
+**Disposition:** fixed
+**Addresses:** [no-schema-evolution-strategy](README.md#no-schema-evolution-strategy), [workflow-transition-silent-catch](README.md#workflow-transition-silent-catch), [status-update-fire-and-forget](README.md#status-update-fire-and-forget)
+**Commit:** 8dd2d5f
+**Author:** Clay Loveless + Claude
+
+`version: "1"` is now required in all YAML configs. The parser rejects configs without a version field or with an unsupported version, and unknown root keys are rejected. All 10 example files and 168 test YAML blocks updated. This establishes the forward-compatibility strategy before any users exist.
+
+`pickTransition` now logs `when:` guard evaluation errors to stderr before skipping, making broken guards visible instead of silently discarded. Task status update failures in the fire-and-forget `.catch()` body are logged to stderr instead of swallowed.

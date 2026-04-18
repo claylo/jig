@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExecHandler } from "../config.ts";
-import type { ToolCallResult, InvokeContext } from "./types.ts";
+import { errorResult, type ToolCallResult, type InvokeContext } from "./types.ts";
 import { render } from "../util/template.ts";
 
 const execFileAsync = promisify(execFile);
@@ -56,13 +56,6 @@ export async function invokeExec(
   } catch (err: unknown) {
     return errorResult(formatError(err));
   }
-}
-
-function errorResult(message: string): ToolCallResult {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
 }
 
 function formatError(err: unknown): string {

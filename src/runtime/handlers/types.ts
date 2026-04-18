@@ -27,3 +27,7 @@ export interface InvokeContext {
   /** Resolved probe values, keyed by probe name. Empty {} when no probes. */
   probe: Record<string, unknown>;
 }
+
+export function errorResult(text: string): ToolCallResult {
+  return { content: [{ type: "text", text }], isError: true };
+}
