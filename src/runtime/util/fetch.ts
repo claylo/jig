@@ -11,6 +11,7 @@ export interface FetchRequest {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 /**
  * Perform an outbound HTTP request and map the outcome to a
@@ -72,7 +73,7 @@ export async function performFetch(req: FetchRequest): Promise<ToolCallResult> {
 
   let bodyText: string;
   try {
-    bodyText = await response.text();
+    bodyText = await readBodyWithLimit(response, MAX_RESPONSE_BYTES);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (signal.aborted) {
@@ -107,4 +108,36 @@ export async function performFetch(req: FetchRequest): Promise<ToolCallResult> {
     );
   }
   return { content: [{ type: "text", text: bodyText }] };
+}
+
+async function readBodyWithLimit(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      reader.cancel();
+      throw new Error(`response body exceeded ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(
+    chunks.length === 1
+      ? chunks[0]!
+      : concatUint8Arrays(chunks, totalBytes),
+  );
+}
+
+function concatUint8Arrays(chunks: Uint8Array[], totalLength: number): Uint8Array {
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }

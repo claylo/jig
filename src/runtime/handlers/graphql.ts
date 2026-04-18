@@ -71,7 +71,7 @@ export async function invokeGraphql(
     );
   }
 
-  const mode = spec.response ?? "data";
+  const mode = spec.response ?? "body";
   if (mode === "envelope") {
     return {
       content: [

@@ -31,7 +31,6 @@ export const DEFAULT_ENV_ALLOW: readonly string[] = [
   "LANG",
   "LC_*",
   "TZ",
-  "PATH",
 ];
 
 // Module state — null means configureAccess has not been called yet.

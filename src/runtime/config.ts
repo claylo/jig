@@ -88,7 +88,7 @@ export interface GraphqlHandler {
     connection: string;
     query: string;
     variables?: unknown; // YAML mapping → JSON with Mustache in string leaves
-    response?: "data" | "envelope";
+    response?: "body" | "envelope";
     timeout_ms?: number;
   };
 }
@@ -482,6 +482,26 @@ function validateServer(v: unknown): ServerMetadata {
  * Validate and return a SecurityConfig from raw parsed YAML. Stores raw
  * strings — $VAR / ~ / . expansion happens in configureAccess at boot.
  */
+function validateSecurityBlock(
+  v: unknown,
+  key: string,
+): { allow?: string[] } {
+  if (!v || typeof v !== "object") {
+    throw new Error(`config: security.${key} must be a mapping`);
+  }
+  const block = v as Record<string, unknown>;
+  if (block["allow"] === undefined) return {};
+  if (!Array.isArray(block["allow"])) {
+    throw new Error(`config: security.${key}.allow must be an array of strings`);
+  }
+  for (const entry of block["allow"]) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      throw new Error(`config: security.${key}.allow entries must be non-empty strings`);
+    }
+  }
+  return { allow: block["allow"] as string[] };
+}
+
 function validateSecurity(v: unknown): SecurityConfig | undefined {
   if (v === undefined) return undefined;
   if (!v || typeof v !== "object") {
@@ -500,63 +520,13 @@ function validateSecurity(v: unknown): SecurityConfig | undefined {
   const result: SecurityConfig = {};
 
   if (sec["filesystem"] !== undefined) {
-    if (!sec["filesystem"] || typeof sec["filesystem"] !== "object") {
-      throw new Error("config: security.filesystem must be a mapping");
-    }
-    const fs = sec["filesystem"] as Record<string, unknown>;
-    if (fs["allow"] !== undefined) {
-      if (!Array.isArray(fs["allow"])) {
-        throw new Error("config: security.filesystem.allow must be an array of strings");
-      }
-      for (const entry of fs["allow"]) {
-        if (typeof entry !== "string" || entry.length === 0) {
-          throw new Error("config: security.filesystem.allow entries must be non-empty strings");
-        }
-      }
-      result.filesystem = { allow: fs["allow"] as string[] };
-    } else {
-      result.filesystem = {};
-    }
+    result.filesystem = validateSecurityBlock(sec["filesystem"], "filesystem");
   }
-
   if (sec["env"] !== undefined) {
-    if (!sec["env"] || typeof sec["env"] !== "object") {
-      throw new Error("config: security.env must be a mapping");
-    }
-    const env = sec["env"] as Record<string, unknown>;
-    if (env["allow"] !== undefined) {
-      if (!Array.isArray(env["allow"])) {
-        throw new Error("config: security.env.allow must be an array of strings");
-      }
-      for (const entry of env["allow"]) {
-        if (typeof entry !== "string" || entry.length === 0) {
-          throw new Error("config: security.env.allow entries must be non-empty strings");
-        }
-      }
-      result.env = { allow: env["allow"] as string[] };
-    } else {
-      result.env = {};
-    }
+    result.env = validateSecurityBlock(sec["env"], "env");
   }
-
   if (sec["network"] !== undefined) {
-    if (!sec["network"] || typeof sec["network"] !== "object") {
-      throw new Error("config: security.network must be a mapping");
-    }
-    const net = sec["network"] as Record<string, unknown>;
-    if (net["allow"] !== undefined) {
-      if (!Array.isArray(net["allow"])) {
-        throw new Error("config: security.network.allow must be an array of strings");
-      }
-      for (const entry of net["allow"]) {
-        if (typeof entry !== "string" || entry.length === 0) {
-          throw new Error("config: security.network.allow entries must be non-empty strings");
-        }
-      }
-      result.network = { allow: net["allow"] as string[] };
-    } else {
-      result.network = {};
-    }
+    result.network = validateSecurityBlock(sec["network"], "network");
   }
 
   return result;
@@ -999,12 +969,12 @@ function validateGraphql(v: unknown, toolName: string): GraphqlHandler {
   };
   if (g["variables"] !== undefined) out.graphql.variables = g["variables"];
   if (g["response"] !== undefined) {
-    if (g["response"] !== "data" && g["response"] !== "envelope") {
+    if (g["response"] !== "body" && g["response"] !== "data" && g["response"] !== "envelope") {
       throw new Error(
-        `config: tools[${toolName}].handler.graphql.response must be "data" or "envelope"`,
+        `config: tools[${toolName}].handler.graphql.response must be "body" or "envelope"`,
       );
     }
-    out.graphql.response = g["response"] as "data" | "envelope";
+    out.graphql.response = (g["response"] === "data" ? "body" : g["response"]) as "body" | "envelope";
   }
   if (g["timeout_ms"] !== undefined) {
     if (typeof g["timeout_ms"] !== "number" || !Number.isFinite(g["timeout_ms"]) || g["timeout_ms"] <= 0) {

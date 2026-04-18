@@ -1,4 +1,5 @@
-import type { ProbeSpec, ProbesConfig, GraphqlHandler, HttpHandler, Handler } from "./config.ts";
+import type { ProbeSpec, ProbesConfig, Handler } from "./config.ts";
+import { validateHandlerPublic } from "./config.ts";
 import type { JsonLogicRule } from "./util/jsonlogic.ts";
 import type { CompiledConnection } from "./connections.ts";
 import { invoke, type InvokeContext, type ToolCallResult } from "./handlers/index.ts";
@@ -63,44 +64,14 @@ function validateProbeEntry(e: Record<string, unknown>, name: string): ProbeSpec
     );
   }
 
-  // Build the handler shape. We do NOT re-validate the inner handler here —
-  // graphql/http get reused from validateGraphql/validateHttp at boot time
-  // when they're actually invoked (resolveProbes, Phase 2). exec gets a
-  // shape check here because it's a leaf.
-  let handler: ProbeSpec["handler"];
-  if (e["exec"] !== undefined) {
-    if (typeof e["exec"] === "string") {
-      if (e["exec"].length === 0) {
-        throw new Error(`config: probes.${name}.exec must be a non-empty string`);
-      }
-      handler = { exec: e["exec"] };
-    } else if (Array.isArray(e["exec"])) {
-      const arr = e["exec"] as unknown[];
-      if (arr.length === 0) {
-        throw new Error(`config: probes.${name}.exec array must not be empty`);
-      }
-      for (let i = 0; i < arr.length; i++) {
-        if (typeof arr[i] !== "string") {
-          throw new Error(`config: probes.${name}.exec[${i}] must be a string`);
-        }
-      }
-      handler = { exec: arr as string[] };
-    } else {
-      throw new Error(`config: probes.${name}.exec must be a non-empty string or array of strings`);
-    }
-  } else if (e["graphql"] !== undefined) {
-    if (!e["graphql"] || typeof e["graphql"] !== "object") {
-      throw new Error(`config: probes.${name}.graphql must be a mapping`);
-    }
-    // Pass through; validateGraphql in config.ts validates shape at handler
-    // dispatch. Probe-time validation would duplicate that logic.
-    handler = { graphql: e["graphql"] } as GraphqlHandler;
-  } else {
-    if (!e["http"] || typeof e["http"] !== "object") {
-      throw new Error(`config: probes.${name}.http must be a mapping`);
-    }
-    handler = { http: e["http"] } as HttpHandler;
-  }
+  // Validate probe handler through the same path as tool handlers so
+  // graphql/http get full structural validation at parse time.
+  const rawHandler: Record<string, unknown> = {};
+  if (e["exec"] !== undefined) rawHandler["exec"] = e["exec"];
+  else if (e["graphql"] !== undefined) rawHandler["graphql"] = e["graphql"];
+  else rawHandler["http"] = e["http"];
+
+  const handler = validateHandlerPublic(rawHandler, `probes.${name}`) as ProbeSpec["handler"];
 
   const out: ProbeSpec = { handler };
 
