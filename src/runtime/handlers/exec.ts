@@ -6,6 +6,8 @@ import { render } from "../util/template.ts";
 
 const execFileAsync = promisify(execFile);
 
+const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024; // 1 MB, matches Node.js default
+
 /**
  * Run a command by rendering its template through Mustache and invoking
  * `child_process.execFile`.
@@ -51,7 +53,8 @@ export async function invokeExec(
   const [command, ...commandArgs] = argv;
 
   try {
-    const { stdout } = await execFileAsync(command!, commandArgs);
+    const maxBuffer = handler.max_output_bytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+    const { stdout } = await execFileAsync(command!, commandArgs, { maxBuffer });
     return { content: [{ type: "text", text: stdout }] };
   } catch (err: unknown) {
     return errorResult(formatError(err));
