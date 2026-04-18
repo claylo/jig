@@ -2,12 +2,12 @@
 audit: 2026-04-18-Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
 last_updated: 2026-04-18
 status:
-  fixed: 10
+  fixed: 21
   mitigated: 0
   accepted: 0
   disputed: 0
   deferred: 0
-  open: 19
+  open: 8
 ---
 
 # Actions Taken: Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
@@ -50,3 +50,25 @@ Tool entries now reject unknown keys using the same pattern as every other confi
 `version: "1"` is now required in all YAML configs. The parser rejects configs without a version field or with an unsupported version, and unknown root keys are rejected. All 10 example files and 168 test YAML blocks updated. This establishes the forward-compatibility strategy before any users exist.
 
 `pickTransition` now logs `when:` guard evaluation errors to stderr before skipping, making broken guards visible instead of silently discarded. Task status update failures in the fire-and-forget `.catch()` body are logged to stderr instead of swallowed.
+
+---
+
+## 2026-04-18 — Consolidate duplicated helpers and merge engine module
+
+**Disposition:** fixed
+**Addresses:** [triplicate-stringify](README.md#triplicate-stringify), [duplicate-render-json-leaves](README.md#duplicate-render-json-leaves), [duplicate-error-result](README.md#duplicate-error-result), [getengine-exported-from-util](README.md#getengine-exported-from-util), [dead-re-export-inline](README.md#dead-re-export-inline)
+**Commit:** bd2c88b
+**Author:** Clay Loveless + Claude
+
+Extracted `stringify()` to `util/stringify.ts` (3 identical copies removed). Moved `renderJsonLeaves()` to `util/template.ts` (2 copies removed). Exported `errorResult()` from `handlers/types.ts` (5 copies removed). Merged `helpers.ts` into `jsonlogic.ts` so the engine singleton never leaves the module — `getEngine()` eliminated entirely. Removed dead `ToolCallResult` re-export from `handlers/inline.ts`. Net -94 lines.
+
+---
+
+## 2026-04-18 — Bound response bodies, unify response mode, evaluate dispatch guards
+
+**Disposition:** fixed
+**Addresses:** [unbounded-http-response-body](README.md#unbounded-http-response-body), [default-env-allowlist-exposes-path](README.md#default-env-allowlist-exposes-path), [response-mode-synonym](README.md#response-mode-synonym), [security-validation-copy-paste](README.md#security-validation-copy-paste), [probe-handler-not-deep-validated](README.md#probe-handler-not-deep-validated), [when-guards-skipped-in-task-dispatch-fusion](README.md#when-guards-skipped-in-task-dispatch-fusion)
+**Commit:** (pending — this branch)
+**Author:** Clay Loveless + Claude
+
+Added 10 MB response body size limit via streaming reader in `performFetch`, preventing unbounded memory growth. Removed `PATH` from default env allowlist. Unified graphql response mode to `"body" | "envelope"` matching http, accepting `"data"` as a deprecated alias. Extracted `validateSecurityBlock()` to replace three identical allow-array validation blocks. Validated probe handlers through `validateHandlerPublic` at parse time. Evaluated `when:` guards in the task-dispatch fusion path, closing the bypass where guarded workflow cases skipped the guard under task-tool fusion.

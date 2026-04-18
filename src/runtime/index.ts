@@ -9,14 +9,13 @@ import { toolToInputSchema } from "./tools.ts";
 import { interpretWorkflow, type ElicitParams, type ElicitResponse } from "./tasks.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
 import { resolveDispatchCase } from "./handlers/dispatch.ts";
+import { evaluate } from "./util/jsonlogic.ts";
 import { configureAccess, isHostAllowed } from "./util/access.ts";
 import { applyTransform } from "./util/transform.ts";
 import { compileConnections } from "./connections.ts";
 import { resolveProbes } from "./probes.ts";
-// Side-effect: importing jsonlogic.ts registers the 16 built-in helpers
-// per ADR-0008. Any module that imports evaluate() triggers this, but
-// this explicit import documents the dependency for boot sequencing.
-import "./util/jsonlogic.ts";
+// jsonlogic.ts helpers register at module load time; the evaluate import
+// above triggers it.
 
 async function main(): Promise<void> {
   const configPath = resolveConfigPath({
@@ -138,7 +137,31 @@ async function main(): Promise<void> {
             return { task };
           }
 
-          // Matched case has its own handler. Branch on workflow: vs sync.
+          // Evaluate when: guard if present — resolveDispatchCase skips it.
+          if (resolved.case.when !== undefined) {
+            let guardPassed: boolean;
+            try {
+              const raw = await evaluate(resolved.case.when, { ...args, probe: ctx.probe });
+              guardPassed = Boolean(raw);
+            } catch (err: unknown) {
+              const message = err instanceof Error ? err.message : String(err);
+              const task = await store.createTask({ ttl: 60_000 });
+              await store.storeTaskResult(task.taskId, "failed", {
+                content: [{ type: "text", text: `dispatch: guard for action "${resolved.caseName}" errored: ${message}` }],
+                isError: true,
+              });
+              return { task };
+            }
+            if (!guardPassed) {
+              const task = await store.createTask({ ttl: 60_000 });
+              await store.storeTaskResult(task.taskId, "failed", {
+                content: [{ type: "text", text: `dispatch: guard for action "${resolved.caseName}" did not pass` }],
+                isError: true,
+              });
+              return { task };
+            }
+          }
+
           const caseHandler = resolved.case.handler;
           if ("workflow" in caseHandler) {
             return startWorkflowTask(
