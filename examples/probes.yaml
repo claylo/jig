@@ -7,6 +7,7 @@
 #
 # Run with `just smoke-probe` (hermetic — no network probes).
 
+version: "1"
 server:
   name: jig-plan5-example
   version: "1.0.0"

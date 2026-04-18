@@ -15,6 +15,7 @@
 # do NOT appear on resources/list (list: undefined is passed to
 # ResourceTemplate at registration time).
 
+version: "1"
 server:
   name: jig-plan7-example
   version: "1.0.0"

@@ -16,6 +16,7 @@
 # expansion doesn't apply inside the command string. Hard-code paths,
 # or pass them via a probe (which resolves at boot).
 
+version: "1"
 server:
   name: jig-plan6-example
   version: "1.0.0"

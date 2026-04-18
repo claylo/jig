@@ -9,6 +9,7 @@ import { invoke as invokeHandler } from "../src/runtime/handlers/index.ts";
 
 test("config accepts a tasks: block with a single workflow", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   process_job:
@@ -43,6 +44,7 @@ tools: []
 
 test("config accepts absent tasks: block", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools: []
 `;
@@ -52,6 +54,7 @@ tools: []
 
 test("config rejects tasks: that isn't a mapping", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks: [a, b]
 tools: []
@@ -61,6 +64,7 @@ tools: []
 
 test("config rejects a workflow without initial:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -73,6 +77,7 @@ tools: []
 
 test("config rejects a workflow whose initial: is not a declared state", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -89,6 +94,7 @@ tools: []
 
 test("config rejects a workflow with no states:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -100,6 +106,7 @@ tools: []
 
 test("config accepts a state with mcpStatus: input_required and elicitation:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -127,6 +134,7 @@ tools: []
 
 test("config rejects a state with mcpStatus: cancelled", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -145,6 +153,7 @@ tools: []
 
 test("config rejects a state with bogus mcpStatus", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -163,6 +172,7 @@ tools: []
 
 test("config rejects a terminal state without result:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -180,6 +190,7 @@ tools: []
 
 test("config rejects a terminal state that declares actions:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -200,6 +211,7 @@ tools: []
 
 test("config rejects a terminal state that declares on:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -221,6 +233,7 @@ tools: []
 
 test("config rejects a non-terminal state without on:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -240,6 +253,7 @@ tools: []
 
 test("config rejects a non-terminal state that declares result:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -261,6 +275,7 @@ tools: []
 
 test("config rejects a transition whose target: is not a declared state", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -281,6 +296,7 @@ tools: []
 
 test("config rejects elicitation: on a working state (only valid on input_required)", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -305,6 +321,7 @@ tools: []
 
 test("config rejects a state with an unknown top-level key", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -326,6 +343,7 @@ tools: []
 
 test("config rejects input_required without elicitation:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -346,6 +364,7 @@ tools: []
 
 test("config rejects input_required with actions:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -372,6 +391,7 @@ tools: []
 
 test("config rejects input_required without on:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -393,6 +413,7 @@ tools: []
 
 test("config rejects input_required with result:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -418,6 +439,7 @@ tools: []
 
 test("config rejects elicitation: with missing message", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -441,6 +463,7 @@ tools: []
 
 test("config rejects elicitation: with missing schema", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -463,6 +486,7 @@ tools: []
 
 test("config rejects elicitation: with empty schema", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -486,6 +510,7 @@ tools: []
 
 test("config rejects elicitation field with invalid type", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -510,6 +535,7 @@ tools: []
 
 test("config rejects elicitation.required listing an undeclared field", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -535,6 +561,7 @@ tools: []
 
 test("config accepts elicitation with required + multiple field types", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -574,6 +601,7 @@ tools: []
 
 test("config rejects a transition with an unknown key", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -595,6 +623,7 @@ tools: []
 
 test("config rejects a transition with no target:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -1065,6 +1094,7 @@ test("interpreter renders elicitation fields in terminal result text", async () 
 
 test("config rejects a workflow handler on a tool without execution.taskSupport", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -1085,6 +1115,7 @@ tools:
 
 test("config rejects a task tool with an inline outer handler (not workflow or dispatch)", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: bad
@@ -1102,6 +1133,7 @@ tools:
 
 test("config rejects a workflow.ref that doesn't resolve", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -1124,6 +1156,7 @@ tools:
 
 test("config accepts a properly wired task tool", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -1147,6 +1180,7 @@ tools:
 
 test("config accepts a task tool with a dispatch handler whose case routes to a workflow", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -1178,6 +1212,7 @@ tools:
 
 test("config rejects a non-task tool with a dispatch handler containing a workflow case", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -1208,6 +1243,7 @@ tools:
 
 test("config rejects a workflow.ref inside a dispatch case that doesn't resolve", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -1237,6 +1273,7 @@ tools:
 
 test("config accepts a task tool with dispatch and NO workflow cases (all sync)", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: jobs

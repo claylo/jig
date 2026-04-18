@@ -10,6 +10,7 @@
 # A tool-level transform wraps the raw handler output in a standard
 # envelope so callers get a uniform shape across actions.
 
+version: "1"
 server:
   name: jig-plan3-example
   version: "1.0.0"

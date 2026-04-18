@@ -15,6 +15,7 @@
 # optional "reason" string. On accept+approved=true → completing. On
 # accept+approved=false or decline → rejected. On cancel → failed.
 
+version: "1"
 server:
   name: jig-plan9-elicitation
   version: "1.0.0"

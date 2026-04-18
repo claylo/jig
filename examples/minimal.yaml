@@ -1,6 +1,7 @@
 # Minimal jig.yaml — a single tool with an inline handler.
 # Plan 2 expands this into a dispatcher-style example.
 
+version: "1"
 server:
   name: jig-minimal
   version: "1.0.0"

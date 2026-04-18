@@ -64,7 +64,8 @@ test("tools/list and tools/call round-trip for an inline tool", { timeout: 10_00
   const configPath = join(dir, "jig.yaml");
   writeFileSync(
     configPath,
-    `server: { name: call-test, version: "0.0.1" }
+    `version: "1"
+server: { name: call-test, version: "0.0.1" }
 tools:
   - name: ping
     description: Respond with pong
@@ -118,7 +119,8 @@ test("dispatcher tools/call routes through exec with field-named errors", { time
   const configPath = join(dir, "jig.yaml");
   writeFileSync(
     configPath,
-    `server: { name: dispatch-int, version: "0.0.1" }
+    `version: "1"
+server: { name: dispatch-int, version: "0.0.1" }
 tools:
   - name: echo
     description: Echo a message
@@ -210,7 +212,8 @@ test(
     const configPath = join(dir, "jig.yaml");
     writeFileSync(
       configPath,
-      `server: { name: plan3-int, version: "0.0.1" }
+      `version: "1"
+server: { name: plan3-int, version: "0.0.1" }
 tools:
   - name: envcheck
     description: x
@@ -307,7 +310,8 @@ test("initialize returns serverInfo matching config", { timeout: 10_000 }, async
   const configPath = join(dir, "jig.yaml");
   writeFileSync(
     configPath,
-    `server: { name: test-init, version: "9.9.9" }
+    `version: "1"
+server: { name: test-init, version: "9.9.9" }
 tools: []
 `,
   );
@@ -349,7 +353,8 @@ test(
     const configPath = join(dir, "jig.yaml");
     writeFileSync(
       configPath,
-      `server:
+      `version: "1"
+server:
   name: plan5-int
   version: "0.0.1"
 probes:
@@ -395,6 +400,7 @@ test("resources/list returns registered resources", { timeout: 15_000 }, async (
   const dir = mkdtempSync(join(tmpdir(), "jig-plan6-list-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan6-list, version: "0.0.1" }
 resources:
   - uri: config://jig/hello
@@ -436,6 +442,7 @@ test("resources/read returns the handler's text content", { timeout: 15_000 }, a
   const dir = mkdtempSync(join(tmpdir(), "jig-plan6-read-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan6-read, version: "0.0.1" }
 resources:
   - uri: config://jig/hello
@@ -475,6 +482,7 @@ test("resources/read surfaces isError handlers as a JSON-RPC error", { timeout: 
   const dir = mkdtempSync(join(tmpdir(), "jig-plan6-read-err-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan6-read-err, version: "0.0.1" }
 resources:
   - uri: config://jig/broken
@@ -511,6 +519,7 @@ test("polling watcher emits resources/updated when content changes and client is
   writeFileSync(statePath, "one");
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan6-poll, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
 resources:
   - uri: config://jig/state
@@ -584,6 +593,7 @@ test("file watcher emits resources/updated when the watched file changes", { tim
   writeFileSync(statePath, "one");
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan6-file, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
 resources:
   - uri: config://jig/state
@@ -640,6 +650,7 @@ test("file watcher rejects a path outside the filesystem allowlist at boot", { t
   const outside = "/etc/hosts"; // well-known path outside $dir
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan6-file-deny, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
 resources:
   - uri: config://jig/state
@@ -676,6 +687,7 @@ test("polling watcher does not emit when client is not subscribed", { timeout: 1
   writeFileSync(statePath, "one");
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan6-nosub, version: "0.0.1", security: { filesystem: { allow: ["${dir}"] } } }
 resources:
   - uri: config://jig/state
@@ -732,6 +744,7 @@ test("plan 6 resources round-trip: list + read + subscribe + polling update + un
   writeFileSync(statePath, "initial");
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server:
   name: plan6-e2e
   version: "0.0.1"
@@ -814,6 +827,7 @@ test("prompts/list returns registered prompts with arguments", { timeout: 15_000
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-plist-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-plist, version: "0.0.1" }
 prompts:
   - name: analyze_job
@@ -867,6 +881,7 @@ test("prompts/get renders the template with provided args", { timeout: 15_000 },
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-pget-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-pget, version: "0.0.1" }
 prompts:
   - name: greet
@@ -946,7 +961,8 @@ test(
     const configPath = join(dir, "jig.yaml");
     writeFileSync(
       configPath,
-      `server:
+      `version: "1"
+server:
   name: plan4-int
   version: "0.0.1"
 connections:
@@ -1070,7 +1086,8 @@ test(
     const configPath = join(dir, "jig.yaml");
     writeFileSync(
       configPath,
-      `server:
+      `version: "1"
+server:
   name: plan5-gql-int
   version: "0.0.1"
 connections:
@@ -1125,6 +1142,7 @@ test("resources/templates/list returns registered template resources", { timeout
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-tlist-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-tlist, version: "0.0.1" }
 resources:
   - template: "queue://jobs/{status}"
@@ -1166,6 +1184,7 @@ test("resources/read resolves a templated resource with variables", { timeout: 1
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-tread-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-tread, version: "0.0.1" }
 resources:
   - template: "queue://jobs/{status}"
@@ -1205,6 +1224,7 @@ test("completion/complete returns prefix-filtered values for a prompt argument r
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-comp-prompt-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-comp-prompt, version: "0.0.1" }
 prompts:
   - name: analyze_job
@@ -1259,6 +1279,7 @@ test("completion/complete returns prefix-filtered values for a resource template
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-comp-res-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-comp-res, version: "0.0.1" }
 resources:
   - template: "queue://jobs/{status}"
@@ -1316,6 +1337,7 @@ test("completion/complete returns empty for an unknown ref", { timeout: 15_000 }
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-comp-unknown-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-comp-unknown, version: "0.0.1" }
 tools: []
 `);
@@ -1354,6 +1376,7 @@ test("plan 7 round-trip: initialize + prompts/list + prompts/get + resources/tem
   const dir = mkdtempSync(join(tmpdir(), "jig-plan7-e2e-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan7-e2e, version: "0.0.1" }
 resources:
   - template: "queue://jobs/{status}"
@@ -1482,6 +1505,7 @@ test("server boots with tasks capability advertised even when no task tool is de
   const dir = mkdtempSync(join(tmpdir(), "jig-plan8-cap-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan8-cap, version: "0.0.1" }
 tools: []
 `);
@@ -1512,6 +1536,7 @@ test("tools/call on a task tool returns a CreateTaskResult, not a CallToolResult
   const dir = mkdtempSync(join(tmpdir(), "jig-plan8-create-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan8-create, version: "0.0.1" }
 tasks:
   instant:
@@ -1581,6 +1606,7 @@ test("plan 8 task lifecycle: tools/call -> tasks/get -> tasks/result returns int
   const dir = mkdtempSync(join(tmpdir(), "jig-plan8-lifecycle-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan8-lifecycle, version: "0.0.1" }
 tasks:
   echo_workflow:
@@ -1688,6 +1714,7 @@ test("dispatcher-task fusion: non-workflow case becomes a synthetic one-step tas
   const dir = mkdtempSync(join(tmpdir(), "jig-plan8-fusion-help-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan8-fusion-help, version: "0.0.1" }
 tasks:
   noop:
@@ -1776,6 +1803,7 @@ test("dispatcher-task fusion: workflow case routes through the interpreter", { t
   const dir = mkdtempSync(join(tmpdir(), "jig-plan8-fusion-run-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, [
+    'version: "1"',
     "server: { name: plan8-fusion-run, version: '0.0.1' }",
     "tasks:",
     "  echo_workflow:",
@@ -1879,6 +1907,7 @@ test("dispatcher-task fusion: all-sync dispatcher under taskSupport", { timeout:
   const dir = mkdtempSync(join(tmpdir(), "jig-plan8-fusion-allsync-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan8-fusion-allsync, version: "0.0.1" }
 tools:
   - name: query
@@ -2115,6 +2144,7 @@ test("plan 9 elicitation lifecycle: tools/call -> elicitation/create -> accept -
   const dir = mkdtempSync(join(tmpdir(), "jig-plan9-elicit-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan9-elicit, version: "0.0.1" }
 tasks:
   confirm_workflow:
@@ -2253,6 +2283,7 @@ test("plan 9 elicitation decline: elicitation/create -> decline -> rejected", { 
   const dir = mkdtempSync(join(tmpdir(), "jig-plan9-decline-"));
   const cfgPath = join(dir, "test.yaml");
   writeFileSync(cfgPath, `
+version: "1"
 server: { name: plan9-decline, version: "0.0.1" }
 tasks:
   confirm_workflow:

@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 
 test("parseConfig accepts a minimal valid config", () => {
   const yaml = `
+version: "1"
 server:
   name: example
   version: "0.1.0"
@@ -29,8 +30,46 @@ tools:
   assert.deepEqual(config.tools[0]!.handler, { inline: { text: "pong" } });
 });
 
+test("parseConfig accepts version: 1", () => {
+  const yaml = `
+version: "1"
+server: { name: e, version: "0.1.0" }
+tools: []
+`;
+  const config = parseConfig(yaml);
+  assert.equal(config.version, "1");
+});
+
+test("parseConfig rejects configs without a version field", () => {
+  const yaml = `
+server: { name: e, version: "0.1.0" }
+tools: []
+`;
+  assert.throws(() => parseConfig(yaml), /version is required/);
+});
+
+test("parseConfig rejects unsupported version", () => {
+  const yaml = `
+version: "99"
+server: { name: e, version: "0.1.0" }
+tools: []
+`;
+  assert.throws(() => parseConfig(yaml), /unsupported version "99"/);
+});
+
+test("parseConfig rejects unknown root keys", () => {
+  const yaml = `
+version: "1"
+server: { name: e, version: "0.1.0" }
+tools: []
+bogus: true
+`;
+  assert.throws(() => parseConfig(yaml), /unknown root key "bogus"/);
+});
+
 test("parseConfig rejects config missing server.name", () => {
   const yaml = `
+version: "1"
 server:
   version: "0.1.0"
 tools: []
@@ -40,6 +79,7 @@ tools: []
 
 test("parseConfig rejects a tool without a handler", () => {
   const yaml = `
+version: "1"
 server: { name: example, version: "0.1.0" }
 tools:
   - name: broken
@@ -65,6 +105,7 @@ test("resolveConfigPath falls back to sibling jig.yaml", () => {
 
 test("parseConfig accepts a tool with an exec handler", () => {
   const yaml = `
+version: "1"
 server: { name: e, version: "0.1.0" }
 tools:
   - name: runner
@@ -78,6 +119,7 @@ tools:
 
 test("parseConfig accepts exec handler as array of strings", () => {
   const yaml = `
+version: "1"
 server: { name: e, version: "0.1.0" }
 tools:
   - name: runner
@@ -91,6 +133,7 @@ tools:
 
 test("parseConfig rejects empty exec array", () => {
   const yaml = `
+version: "1"
 server: { name: e, version: "0.1.0" }
 tools:
   - name: runner
@@ -103,6 +146,7 @@ tools:
 
 test("parseConfig rejects exec array with non-string element", () => {
   const yaml = `
+version: "1"
 server: { name: e, version: "0.1.0" }
 tools:
   - name: runner
@@ -115,6 +159,7 @@ tools:
 
 test("parseConfig rejects duplicate tool names", () => {
   const yaml = `
+version: "1"
 server: { name: e, version: "0.1.0" }
 tools:
   - name: echo
@@ -131,6 +176,7 @@ tools:
 
 test("parseConfig rejects unknown keys in tool entry", () => {
   const yaml = `
+version: "1"
 server: { name: e, version: "0.1.0" }
 tools:
   - name: echo
@@ -144,6 +190,7 @@ tools:
 
 test("parseConfig rejects invalid input field type", () => {
   const yaml = `
+version: "1"
 server: { name: e, version: "0.1.0" }
 tools:
   - name: echo
@@ -158,6 +205,7 @@ tools:
 
 test("parseConfig accepts a dispatcher tool", () => {
   const yaml = `
+version: "1"
 server: { name: d, version: "0.1.0" }
 tools:
   - name: linear
@@ -187,6 +235,7 @@ tools:
 
 test("parseConfig rejects a dispatcher with zero cases", () => {
   const yaml = `
+version: "1"
 server: { name: d, version: "0.1.0" }
 tools:
   - name: empty
@@ -201,6 +250,7 @@ tools:
 
 test("parseConfig rejects a dispatcher missing the on field", () => {
   const yaml = `
+version: "1"
 server: { name: d, version: "0.1.0" }
 tools:
   - name: no-on
@@ -219,7 +269,8 @@ test("loadConfigFromFile parses an on-disk file", () => {
   const path = join(dir, "jig.yaml");
   writeFileSync(
     path,
-    `server: { name: disk-example, version: "0.1.0" }
+    `version: "1"
+server: { name: disk-example, version: "0.1.0" }
 tools:
   - name: ping
     description: p
@@ -236,6 +287,7 @@ tools:
 
 test("parseConfig treats missing security block as undefined (defaults applied at configureAccess)", () => {
   const yaml = `
+version: "1"
 server: { name: s, version: "0.1.0" }
 tools: []
 `;
@@ -245,6 +297,7 @@ tools: []
 
 test("parseConfig accepts a full security block", () => {
   const yaml = `
+version: "1"
 server:
   name: s
   version: "0.1.0"
@@ -267,6 +320,7 @@ tools: []
 
 test("parseConfig rejects non-array security.filesystem.allow", () => {
   const yaml = `
+version: "1"
 server:
   name: s
   version: "0.1.0"
@@ -280,6 +334,7 @@ tools: []
 
 test("parseConfig rejects unknown top-level security keys", () => {
   const yaml = `
+version: "1"
 server:
   name: s
   version: "0.1.0"
@@ -292,6 +347,7 @@ tools: []
 
 test("parseConfig accepts a tool with a compute handler", () => {
   const yaml = `
+version: "1"
 server: { name: c, version: "0.1.0" }
 tools:
   - name: now
@@ -307,6 +363,7 @@ tools:
 
 test("parseConfig accepts a tool with a transform", () => {
   const yaml = `
+version: "1"
 server: { name: t, version: "0.1.0" }
 tools:
   - name: wrap
@@ -326,6 +383,7 @@ tools:
 
 test("config accepts an http handler with connection + method", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   api:
@@ -347,6 +405,7 @@ tools:
 
 test("config rejects http without connection or url", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: t1
@@ -360,6 +419,7 @@ tools:
 
 test("config rejects http with invalid method", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: t1
@@ -377,6 +437,7 @@ connections:
 
 test("config rejects http with unknown keys", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   api:
@@ -395,6 +456,7 @@ tools:
 
 test("config accepts a graphql handler", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   api:
@@ -415,6 +477,7 @@ tools:
 
 test("config rejects graphql without a query", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections: { api: { url: https://example.com } }
 tools:
@@ -429,6 +492,7 @@ tools:
 
 test("config rejects graphql with unknown keys", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   api:
@@ -447,6 +511,7 @@ tools:
 
 test("config accepts a tool with execution.taskSupport: required", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -468,6 +533,7 @@ tools:
 
 test("config accepts a tool with execution.taskSupport: optional", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tasks:
   w:
@@ -488,6 +554,7 @@ tools:
 
 test("config accepts a tool without execution: (default = non-task)", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: plain
@@ -501,6 +568,7 @@ tools:
 
 test("config rejects execution: that isn't a mapping", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: bad
@@ -514,6 +582,7 @@ tools:
 
 test("config rejects execution: with no taskSupport", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: bad
@@ -527,6 +596,7 @@ tools:
 
 test("config rejects execution.taskSupport: forbidden", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: bad
@@ -544,6 +614,7 @@ tools:
 
 test("config rejects execution.taskSupport: bogus value", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: bad
@@ -561,6 +632,7 @@ tools:
 
 test("config rejects execution: with an unknown key", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: bad

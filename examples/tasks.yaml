@@ -23,6 +23,7 @@
 # (the last one to run). To carry data forward across states in v1, the
 # pattern is to re-emit needed fields from each state's last action.
 
+version: "1"
 server:
   name: jig-plan8-example
   version: "1.0.0"

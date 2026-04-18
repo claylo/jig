@@ -8,6 +8,7 @@ import "../src/runtime/util/helpers.ts";
 
 test("config parses a connections: block and expands ${VAR} in headers", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   linear_api:
@@ -30,6 +31,7 @@ tools: []
 
 test("config accepts an empty connections: block", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections: {}
 tools: []
@@ -40,6 +42,7 @@ tools: []
 
 test("config omits connections when the YAML has no block", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools: []
 `;
@@ -49,6 +52,7 @@ tools: []
 
 test("config parses server.security.network.allow", () => {
   const yamlText = `
+version: "1"
 server:
   name: t
   version: "0.0.1"
@@ -66,6 +70,7 @@ tools: []
 
 test("config rejects non-string entries in security.network.allow", () => {
   const yamlText = `
+version: "1"
 server:
   name: t
   version: "0.0.1"
@@ -79,6 +84,7 @@ tools: []
 
 test("config rejects connections without url", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   bad:
@@ -90,6 +96,7 @@ tools: []
 
 test("config rejects connections with unknown keys", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   bad:
@@ -102,6 +109,7 @@ tools: []
 
 test("config rejects connections with non-positive timeout_ms", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   bad:
@@ -114,6 +122,7 @@ tools: []
 
 test("config rejects connections as an array", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections: [1, 2]
 tools: []

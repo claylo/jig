@@ -4,6 +4,7 @@ import { parseConfig } from "../src/runtime/config.ts";
 
 test("config accepts a resources: block with a single static-uri resource", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://jig/hello
@@ -27,6 +28,7 @@ tools: []
 
 test("config accepts resources with polling and file watchers", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: queue://jobs
@@ -57,6 +59,7 @@ tools: []
 
 test("config rejects resources that isn't an array", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   not_an_array: true
@@ -67,6 +70,7 @@ tools: []
 
 test("config rejects a resource missing uri", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - name: Missing URI
@@ -78,6 +82,7 @@ tools: []
 
 test("config rejects a resource with an invalid uri", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: "not a uri because spaces"
@@ -90,6 +95,7 @@ tools: []
 
 test("config rejects duplicate resource URIs", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://dup
@@ -105,6 +111,7 @@ tools: []
 
 test("config rejects a resource with an unknown top-level key", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://x
@@ -118,6 +125,7 @@ tools: []
 
 test("config rejects a polling watcher missing interval_ms", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://x
@@ -132,6 +140,7 @@ tools: []
 
 test("config rejects a polling watcher with a non-positive interval_ms", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://x
@@ -147,6 +156,7 @@ tools: []
 
 test("config rejects a polling watcher with bad change_detection", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://x
@@ -163,6 +173,7 @@ tools: []
 
 test("config rejects a file watcher missing path", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://x
@@ -177,6 +188,7 @@ tools: []
 
 test("config rejects an unknown watcher type", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://x
@@ -192,6 +204,7 @@ tools: []
 
 test("config rejects a watcher with an unknown key for its type", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: config://x
@@ -208,6 +221,7 @@ tools: []
 
 test("config accepts a resources: entry with template: instead of uri:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - template: "queue://jobs/{status}"
@@ -230,6 +244,7 @@ tools: []
 
 test("config rejects a resource with both uri: and template:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: "queue://jobs"
@@ -243,6 +258,7 @@ tools: []
 
 test("config rejects a resource with neither uri: nor template:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - name: Missing both
@@ -254,6 +270,7 @@ tools: []
 
 test("config rejects a template: resource with a watcher:", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - template: "queue://jobs/{status}"
@@ -269,6 +286,7 @@ tools: []
 
 test("config allows mixed static and template resources", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - uri: "config://jig/hello"
