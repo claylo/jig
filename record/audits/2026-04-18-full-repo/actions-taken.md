@@ -2,12 +2,12 @@
 audit: 2026-04-18-Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
 last_updated: 2026-04-18
 status:
-  fixed: 23
+  fixed: 24
   mitigated: 0
   accepted: 1
   disputed: 0
   deferred: 4
-  open: 1
+  open: 0
 ---
 
 # Actions Taken: Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples
@@ -128,3 +128,16 @@ The six CLI commands (jig new/dev/validate/build/serve/inspect) are Plan 10 scop
 **Addresses:** [stdio-only-transport](README.md#stdio-only-transport)
 
 Streamable HTTP transport is planned. The server.ts adapter already accepts a Transport interface, so the implementation is additive. Target: transport implementation session.
+
+---
+
+## 2026-04-18 — Add server adapter unit tests, cache headers, expose maxBuffer
+
+**Disposition:** fixed
+**Addresses:** [no-unit-tests-server-adapter](README.md#no-unit-tests-server-adapter), [connection-headers-re-evaluated-per-request](README.md#connection-headers-re-evaluated-per-request), [exec-stdout-default-maxbuffer](README.md#exec-stdout-default-maxbuffer)
+**Commit:** (pending — this branch)
+**Author:** Clay Loveless + Claude
+
+Added `tests/server.test.ts` with 14 unit tests covering `createServer`, `registerTool` (both schema branches), `registerResource`, `registerResourceTemplate`, `trackSubscriptions`, `registerPrompt` (both schema branches), `registerToolTask` (both schema branches), `wireCompletions`, and server config mapping (description, instructions). Total test count: 329.
+
+Cached resolved connection headers via WeakMap after first evaluation. Added optional `max_output_bytes` field to exec handler config with 1 MB default.
