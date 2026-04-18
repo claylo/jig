@@ -10,6 +10,7 @@
 # or against a real environment where JIG_EXAMPLE_TOKEN points at a
 # valid API token and the allowlists cover api.example.invalid.
 
+version: "1"
 server:
   name: jig-plan4-example
   version: "1.0.0"

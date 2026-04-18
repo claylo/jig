@@ -4,6 +4,7 @@ import { parseConfig } from "../src/runtime/config.ts";
 
 test("config accepts a probes: block with a single graphql probe", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections:
   api:
@@ -29,6 +30,7 @@ tools:
 
 test("config accepts http and exec probes", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections: { api: { url: https://example.com } }
 probes:
@@ -51,6 +53,7 @@ tools:
 
 test("config rejects a probe with no handler", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   bare:
@@ -62,6 +65,7 @@ tools: []
 
 test("config rejects a probe with two handlers", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 connections: { api: { url: https://example.com } }
 probes:
@@ -75,6 +79,7 @@ tools: []
 
 test("config rejects an unknown key in a probe", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   weird:
@@ -87,6 +92,7 @@ tools: []
 
 test("config rejects probe names that aren't Mustache-safe", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   "bad.name":
@@ -98,6 +104,7 @@ tools: []
 
 test("config rejects negative timeout_ms", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   slow:
@@ -110,6 +117,7 @@ tools: []
 
 test("config accepts a probe with a map: rule (no structural check at parse time)", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   shaped:
@@ -124,6 +132,7 @@ tools: []
 
 test("config accepts a server with no probes block", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools:
   - name: t1
@@ -136,6 +145,7 @@ tools:
 
 test("config rejects probes: null at the top level", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes: ~
 tools: []
@@ -145,6 +155,7 @@ tools: []
 
 test("config rejects probes: as an array at the top level", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes: []
 tools: []
@@ -154,6 +165,7 @@ tools: []
 
 test("config rejects probes: as a scalar string", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes: "oops"
 tools: []
@@ -163,6 +175,7 @@ tools: []
 
 test("config rejects a probe entry that is null", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   broken: ~
@@ -173,6 +186,7 @@ tools: []
 
 test("config rejects a probe entry that is an array", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   broken: []

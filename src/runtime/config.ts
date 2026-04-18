@@ -316,6 +316,7 @@ export interface ConnectionDefinition {
 export type ConnectionsConfig = Record<string, ConnectionDefinition>;
 
 export interface JigConfig {
+  version: string;
   server: ServerMetadata;
   tools: ToolDefinition[];
   connections?: ConnectionsConfig;
@@ -331,12 +332,37 @@ export interface JigConfig {
   tasks?: TasksConfig;
 }
 
+const KNOWN_ROOT_KEYS = new Set([
+  "version", "server", "tools", "connections", "probes",
+  "resources", "prompts", "completions", "tasks",
+]);
+
+const CURRENT_VERSION = "1";
+
 export function parseConfig(yamlText: string): JigConfig {
   const raw = parseYaml(yamlText) as unknown;
   if (!raw || typeof raw !== "object") {
     throw new Error("config: YAML root must be a mapping");
   }
   const obj = raw as Record<string, unknown>;
+
+  for (const key of Object.keys(obj)) {
+    if (!KNOWN_ROOT_KEYS.has(key)) {
+      throw new Error(`config: unknown root key "${key}"`);
+    }
+  }
+
+  if (obj["version"] === undefined) {
+    throw new Error(
+      `config: version is required (current version is "${CURRENT_VERSION}")`,
+    );
+  }
+  const version = String(obj["version"]);
+  if (version !== CURRENT_VERSION) {
+    throw new Error(
+      `config: unsupported version "${version}" (this runtime supports version "${CURRENT_VERSION}")`,
+    );
+  }
 
   const server = validateServer(obj["server"]);
   const tools = validateTools(obj["tools"]);
@@ -349,7 +375,7 @@ export function parseConfig(yamlText: string): JigConfig {
   const completions = validateCompletions(obj["completions"], prompts, resources);
   const tasks = validateTasks(obj["tasks"], (h, owner) => validateHandlerPublic(h, owner));
 
-  const result: JigConfig = { server, tools };
+  const result: JigConfig = { version, server, tools };
   if (connections !== undefined) result.connections = connections;
   if (probes !== undefined) result.probes = probes;
   if (resources !== undefined) result.resources = resources;

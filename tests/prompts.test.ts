@@ -4,6 +4,7 @@ import { parseConfig } from "../src/runtime/config.ts";
 
 test("config accepts a prompts: block with a single prompt", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: analyze_job
@@ -33,6 +34,7 @@ tools: []
 
 test("config accepts prompts: with no arguments array", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: simple
@@ -46,6 +48,7 @@ tools: []
 
 test("config accepts absent prompts: block", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 tools: []
 `;
@@ -55,6 +58,7 @@ tools: []
 
 test("config rejects prompts: that isn't an array", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   not_an_array: true
@@ -65,6 +69,7 @@ tools: []
 
 test("config rejects a prompt missing name", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - description: No name
@@ -76,6 +81,7 @@ tools: []
 
 test("config rejects a prompt with an empty name", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: ""
@@ -87,6 +93,7 @@ tools: []
 
 test("config rejects a prompt missing template", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: no_template
@@ -98,6 +105,7 @@ tools: []
 
 test("config rejects duplicate prompt names", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: dup
@@ -111,6 +119,7 @@ tools: []
 
 test("config rejects a prompt with an unknown top-level key", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: foo
@@ -123,6 +132,7 @@ tools: []
 
 test("config rejects an argument missing name", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: foo
@@ -136,6 +146,7 @@ tools: []
 
 test("config rejects duplicate argument names within a prompt", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: foo
@@ -150,6 +161,7 @@ tools: []
 
 test("config rejects an argument with an unknown key", () => {
   const yamlText = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: foo

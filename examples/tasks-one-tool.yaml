@@ -27,6 +27,7 @@
 #   - The workflow case (run) drives interpretWorkflow, same as
 #     examples/tasks.yaml's dedicated workflow tool.
 
+version: "1"
 server:
   name: jig-plan8-onetool
   version: "1.0.0"

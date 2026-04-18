@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { parseConfig } from "../src/runtime/config.ts";
 
 const BASE_WITH_PROMPT = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 prompts:
   - name: analyze_job
@@ -14,6 +15,7 @@ tools: []
 `;
 
 const BASE_WITH_TEMPLATE = `
+version: "1"
 server: { name: t, version: "0.0.1" }
 resources:
   - template: "queue://jobs/{status}"

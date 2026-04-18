@@ -8,6 +8,7 @@
 # The `help` action shows the shape without requiring any external
 # handlers — callers can run it first to see what's available.
 
+version: "1"
 server:
   name: jig-dispatcher
   version: "1.0.0"

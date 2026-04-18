@@ -87,7 +87,8 @@ test(
     const configPath = join(dir, "jig.yaml");
     writeFileSync(
       configPath,
-      `server:
+      `version: "1"
+server:
   name: t
   version: "0.0.1"
   security:

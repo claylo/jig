@@ -562,11 +562,11 @@ export async function interpretWorkflow(
       return;
     }
 
-    // Push status update; do not await failure-blocking.
     void store
       .updateTaskStatus(taskId, state.mcpStatus, state.statusMessage)
-      .catch(() => {
-        // Swallow — status push is best-effort.
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`jig: status update failed for task ${taskId}: ${msg}\n`);
       });
 
     // ── input_required: elicit and bind ──
@@ -675,7 +675,11 @@ async function pickTransition(
     let matched: unknown;
     try {
       matched = await evalJsonLogic(t.when as JsonLogicRule, workflowCtx);
-    } catch {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `jig: when: guard error (skipping transition to "${t.target}"): ${msg}\n`,
+      );
       continue;
     }
     if (matched) return t;
