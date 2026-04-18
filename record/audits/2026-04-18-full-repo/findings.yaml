@@ -1,0 +1,1421 @@
+---
+audit_date: 2026-04-18
+scope: "Full repo audit — src/runtime (TypeScript MCP server runtime), tests, examples"
+commit: d825be6546b4291dba1d8bf85b390b295004e89d
+assessment: |
+  jig is a 4-day-old TypeScript MCP server runtime (~5.1k LOC, 77 commits) with a
+  disciplined architecture: strict TypeScript configuration (noUncheckedIndexedAccess,
+  noImplicitReturns, verbatimModuleSyntax), clean module boundaries quarantining the SDK
+  behind server.ts, extensive test coverage (18 test files, ~6.9k LOC), and a hand-rolled
+  config validator that rejects unknown keys across 12+ config blocks. The exec handler's
+  argument injection via whitespace-splitting is the primary security concern — execFile
+  prevents shell metacharacters, but space-separated argument injection is fully reachable
+  from MCP clients. The workflow subsystem's fire-and-forget promise launch is the primary
+  reliability concern — an unhandled rejection crashes the server. The config validator has
+  five validation gaps where the YAML author gets silent acceptance instead of the
+  loud-failure pattern enforced elsewhere. Code duplication is emerging across handlers but
+  is expected at this project age and consolidation is straightforward. The dependency tree
+  is minimal (4 production deps) and advisory-free. Overall posture: strong foundation with
+  a short remediation list — one security fix and one crash-risk fix are near-term priorities.
+
+narratives:
+  - slug: tool-dispatch-boundary
+    title: "The Tool Dispatch Boundary"
+    thesis: "The dispatch path from MCP tool call to handler execution has one exploitable argument injection and four config validation gaps that silently accept invalid YAML."
+    verdict: "The exec handler's whitespace-split argument construction is the most consequential finding in this audit — it creates a real argument injection vector reachable from any MCP client. The four config validation gaps are defense-in-depth issues: they don't create vulnerabilities alone, but they erode the 'typos fail loud' principle that the rest of the validator enforces consistently. The exec injection needs near-term remediation; the validation gaps are straightforward additions following existing patterns in the same file."
+
+    flow:
+      - id: client-call
+        label: "MCP client sends tools/call"
+        type: start
+      - id: boot-validation
+        label: "Boot-time config validation"
+        type: process
+        findings:
+          - slug: tool-unknown-keys-not-rejected
+            label: "Unknown keys pass"
+          - slug: input-type-not-validated
+            label: "Bad types pass"
+          - slug: tool-name-uniqueness-not-enforced
+            label: "Dupes accepted"
+      - id: parse-args
+        label: "Parse JSON-RPC arguments"
+        type: process
+      - id: is-task-tool
+        label: "Task-enabled tool?"
+        type: decision
+        no: sync-path
+      - id: task-resolve
+        label: "resolveDispatchCase"
+        type: process
+        findings:
+          - slug: when-guards-skipped-in-task-dispatch-fusion
+            label: "Guards skipped"
+      - id: exec-handler
+        label: "exec: render + split argv"
+        type: process
+        findings:
+          - slug: exec-arg-injection-via-whitespace-split
+            label: "Arg injection"
+      - id: return-result
+        label: "Return tool result"
+        type: end
+      - id: sync-path
+        label: "Evaluate guards + invoke"
+        type: process
+        spine: false
+        next: exec-handler
+
+    findings:
+      - slug: exec-arg-injection-via-whitespace-split
+        title: "Argument injection in exec handler via whitespace-splitting of template-rendered command"
+        concern: significant
+        locations:
+          - path: src/runtime/handlers/exec.ts
+            start_line: 27
+            end_line: 28
+        evidence: |
+          const rendered = render(handler.exec, { ...args, probe: ctx.probe });
+          const argv = rendered.trim().split(/\s+/).filter((part) => part.length > 0);
+        evidence_markers:
+          - lines: "1"
+            type: mark
+            label: "User-controlled args injected into template"
+          - lines: "2"
+            type: del
+            label: "Whitespace split produces extra argv elements from user input"
+        mechanism: |
+          The exec handler renders user-controlled MCP tool-call arguments into a Mustache
+          template, then splits the rendered string on whitespace to produce an argv array.
+          Because the template engine performs no escaping or quoting, an attacker-controlled
+          argument containing spaces produces additional argv elements passed to execFile.
+          While execFile without shell:true prevents shell metacharacter injection, argument
+          injection is fully reachable: the attacker can inject arbitrary flags and positional
+          arguments. For many commands (git, tar, rsync, curl), injected arguments enable
+          arbitrary file read, write, or code execution. Path: MCP client args -> render()
+          -> split(/\s+/) -> execFileAsync().
+        remediation: |
+          Replace the whitespace-split argv with a structured argv template. Change the exec
+          handler spec from a single string to an array of strings, each rendered independently:
+          exec: ["git", "log", "--oneline", "{{count}}"]. Each rendered element becomes one
+          argv entry regardless of content. If the single-string format must be preserved,
+          shell-quote each substituted value before interpolation.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 2
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: medium
+        effort_notes: "YAML schema change (exec: string -> string | string[]), config validation update, docs."
+
+      - slug: when-guards-skipped-in-task-dispatch-fusion
+        title: "Dispatch case when: guards not evaluated under task-tool fusion"
+        concern: moderate
+        locations:
+          - path: src/runtime/handlers/dispatch.ts
+            start_line: 22
+            end_line: 25
+          - path: src/runtime/index.ts
+            start_line: 130
+            end_line: 151
+        evidence: |
+          export function resolveDispatchCase(
+            handler: DispatchHandler,
+            args: Record<string, unknown>,
+          ): ResolveDispatchResult {
+        evidence_markers:
+          - lines: "1-4"
+            type: mark
+            label: "resolveDispatchCase does not evaluate when: guards"
+        mechanism: |
+          When a dispatch tool has execution.taskSupport, the boot integration in index.ts
+          calls resolveDispatchCase() which matches on the discriminator and checks requires:,
+          but does NOT evaluate when: guards. Guard evaluation only happens in the synchronous
+          invokeDispatch() path. A dispatch case with both a when: guard and a workflow: handler
+          will bypass the guard entirely under task-tool fusion. The handoff notes this as a
+          "known limitation" but the YAML examples do not document it.
+        remediation: |
+          Evaluate when: guards in the task-dispatch fusion path before branching on handler
+          type, or add a parse-time warning when a dispatch case has both when: and a workflow:
+          handler inside a task tool.
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-18"
+          commit_count: 5
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [exec-arg-injection-via-whitespace-split]
+        effort: small
+        effort_notes: "Adding evaluate(matched.when, args) before handler-type branch is ~10 lines."
+
+      - slug: tool-unknown-keys-not-rejected
+        title: "Tool entries do not reject unknown keys unlike every other config block"
+        concern: moderate
+        locations:
+          - path: src/runtime/config.ts
+            start_line: 547
+            end_line: 579
+        evidence: |
+          function validateTool(entry: unknown, index: number): ToolDefinition {
+            if (!entry || typeof entry !== "object") {
+              throw new Error(`config: tools[${index}] must be a mapping`);
+            }
+            const t = entry as Record<string, unknown>;
+            if (typeof t["name"] !== "string" || t["name"].length === 0) {
+              throw new Error(`config: tools[${index}].name is required`);
+            }
+            if (typeof t["description"] !== "string") {
+              throw new Error(`config: tools[${index}].description is required`);
+            }
+            if (!t["handler"] || typeof t["handler"] !== "object") {
+              throw new Error(`config: tools[${index}].handler is required`);
+            }
+            const handler = validateHandler(t["handler"], t["name"]);
+            const transformRaw = t["transform"];
+            const execution = validateExecution(t["execution"], t["name"]);
+            const tool: ToolDefinition = {
+              name: t["name"],
+              description: t["description"],
+              input: validateInput(t["input"], t["name"]),
+              handler,
+            };
+            if (transformRaw !== undefined) {
+              tool.transform = transformRaw as JsonLogicRule;
+            }
+            if (execution !== undefined) {
+              tool.execution = execution;
+            }
+            return tool;
+          }
+        evidence_markers:
+          - lines: "1-31"
+            type: mark
+            label: "No unknown-key check — compare to connections, probes, resources, prompts"
+        mechanism: |
+          Every other config block rejects unknown keys with a clear error. Tool entries are
+          the sole exception. A YAML author who writes gaurd: instead of guard: or
+          annotations: (not yet supported) gets silent acceptance — the typo is silently
+          dropped. This breaks the "typos fail loud" principle the rest of the validator
+          enforces.
+        remediation: |
+          Add the same unknown-key check pattern. Define a TOOL_KNOWN set containing "name",
+          "description", "input", "handler", "transform", "execution" and iterate
+          Object.keys(t) to reject unknowns.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 22
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [input-type-not-validated, tool-name-uniqueness-not-enforced]
+        effort: trivial
+        effort_notes: "5-line addition following existing pattern used in 12+ other validators."
+
+      - slug: input-type-not-validated
+        title: "InputFieldSchema.type accepts any string at parse time"
+        concern: moderate
+        locations:
+          - path: src/runtime/config.ts
+            start_line: 621
+            end_line: 626
+        evidence: |
+              const s = schema as Record<string, unknown>;
+              if (typeof s["type"] !== "string") {
+                throw new Error(`config: tools[${toolName}].input.${field}.type is required`);
+              }
+              out[field] = {
+                type: s["type"] as InputFieldSchema["type"],
+        evidence_markers:
+          - lines: "6"
+            type: del
+            label: "Cast without runtime validation — any string passes"
+        mechanism: |
+          The TypeScript type restricts InputFieldSchema.type to "string" | "integer" |
+          "number" | "boolean" | "object" | "array", but the runtime validator only checks
+          typeof — any string passes. A YAML author writing type: strinng gets no parse-time
+          error. The invalid type value flows into JSON Schema sent to the SDK's
+          fromJsonSchema(). Every other enum-like field in the config is validated against its
+          allowed set.
+        remediation: |
+          Add a validTypes Set with the six allowed values and check membership before
+          the cast, matching the pattern used for mcpStatus, response mode, and other
+          enum fields.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 22
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [tool-unknown-keys-not-rejected]
+        effort: trivial
+        effort_notes: "3-line addition: define set, check membership, throw with standard format."
+
+      - slug: tool-name-uniqueness-not-enforced
+        title: "Duplicate tool names silently accepted by config parser"
+        concern: moderate
+        locations:
+          - path: src/runtime/config.ts
+            start_line: 539
+            end_line: 545
+        evidence: |
+          function validateTools(v: unknown): ToolDefinition[] {
+            if (v === undefined) return [];
+            if (!Array.isArray(v)) {
+              throw new Error("config: tools must be an array");
+            }
+            return v.map((entry, i) => validateTool(entry, i));
+          }
+        evidence_markers:
+          - lines: "1-7"
+            type: mark
+            label: "No uniqueness check — compare to validatePrompts which tracks seenNames"
+        mechanism: |
+          The prompts validator tracks seenNames and rejects duplicates. The resources
+          validator tracks seen URIs. The tool validator does neither. When two tools share
+          a name, McpServer.registerTool silently overwrites the first — the author loses
+          a tool with no error. Especially dangerous with YAML anchors/aliases.
+        remediation: |
+          Add a seenNames Set to validateTools matching the pattern in validatePrompts.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 22
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [tool-unknown-keys-not-rejected]
+        effort: trivial
+        effort_notes: "4-line addition following the existing pattern in validatePrompts."
+
+  - slug: error-propagation
+    title: "The Error Propagation Surface"
+    thesis: "The workflow subsystem's error handling has one crash path, one uncovered try-catch gap, and two silent-discard patterns that contrast sharply with the clean error propagation in the synchronous handler path."
+    verdict: "The synchronous tool dispatch path has solid error handling — exceptions bubble through invoke() to the SDK, which returns them as JSON-RPC errors. The async workflow path is where errors fall through the cracks: the fire-and-forget promise launch creates a real crash risk under Node's default --unhandled-rejections=throw, and the silent catch in pickTransition makes config errors invisible. These findings cluster in the newest code (tasks.ts, landed Plans 8-9) and follow a 'get it working, then harden' pattern. The hardening step is the next priority."
+
+    flow:
+      - id: task-created
+        label: "Workflow task created"
+        type: start
+      - id: launch-workflow
+        label: "void interpretWorkflow()"
+        type: process
+        findings:
+          - slug: workflow-fire-and-forget-unhandled-rejection
+            label: "No .catch()"
+      - id: run-actions
+        label: "Execute state actions"
+        type: process
+      - id: action-ok
+        label: "Actions succeed?"
+        type: decision
+        no: action-error
+      - id: pick-transition
+        label: "pickTransition()"
+        type: process
+        findings:
+          - slug: workflow-transition-silent-catch
+            label: "Silent catch"
+      - id: update-status
+        label: "Push status update"
+        type: process
+        findings:
+          - slug: status-update-fire-and-forget
+            label: "Errors swallowed"
+      - id: is-terminal
+        label: "Terminal state?"
+        type: decision
+        no: run-actions
+      - id: store-result
+        label: "Store task result"
+        type: end
+        findings:
+          - slug: get-task-result-null-cast
+            label: "Null bypass"
+      - id: action-error
+        label: "HTTP body read throws"
+        type: process
+        spine: false
+        findings:
+          - slug: fetch-response-body-read-uncaught
+            label: "Outside try-catch"
+        next: launch-workflow
+
+    findings:
+      - slug: workflow-fire-and-forget-unhandled-rejection
+        title: "interpretWorkflow launched as fire-and-forget with no .catch() handler"
+        concern: significant
+        locations:
+          - path: src/runtime/index.ts
+            start_line: 197
+            end_line: 211
+        evidence: |
+          void interpretWorkflow({
+            workflow,
+            args,
+            ctx,
+            store,
+            taskId: task.taskId,
+            invoke,
+            elicit: async (params: ElicitParams): Promise<ElicitResponse> => {
+              const result = await elicit(params) as { action: string; content?: Record<string, unknown> };
+              return {
+                action: result.action as ElicitResponse["action"],
+                content: result.content,
+              };
+            },
+          });
+        evidence_markers:
+          - lines: "1"
+            type: del
+            label: "void discards the promise — no .catch() attached"
+        mechanism: |
+          startWorkflowTask launches interpretWorkflow as a detached promise via void. Inside
+          interpretWorkflow, the terminal-state path calls await store.storeTaskResult() without
+          a try-catch. If the store throws (task expired past TTL, store internal error), the
+          rejection becomes unhandled. Under Node.js default behavior (--unhandled-rejections=throw),
+          this crashes the process. The MCP SDK does not govern this path.
+        remediation: |
+          Attach a .catch() handler: void interpretWorkflow({...}).catch((err) => {
+          process.stderr.write(...); }). Alternatively, wrap store.storeTaskResult at
+          tasks.ts:636 in try-catch matching the pattern at tasks.ts:603-611.
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-16"
+          commit_count: 5
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+        chains:
+          enables: []
+          enabled_by: [fetch-response-body-read-uncaught]
+          related: [workflow-transition-silent-catch]
+        effort: trivial
+        effort_notes: "One-line .catch() addition."
+
+      - slug: fetch-response-body-read-uncaught
+        title: "response.text() outside try-catch can throw on stream failure"
+        concern: moderate
+        locations:
+          - path: src/runtime/util/fetch.ts
+            start_line: 57
+            end_line: 73
+        evidence: |
+          let response: Response;
+          try {
+            response = await fetch(req.url, {
+              method: req.method,
+              headers: req.headers,
+              body: req.body,
+              signal,
+            });
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (signal.aborted) {
+              return errorResult(`http: timeout after ${timeout}ms`);
+            }
+            return errorResult(`http: ${msg}`);
+          }
+
+          const bodyText = await response.text();
+        evidence_markers:
+          - lines: "2-15"
+            type: mark
+            label: "try-catch covers fetch() but not response.text()"
+          - lines: "17"
+            type: del
+            label: "response.text() outside catch — throws propagate uncaught"
+        mechanism: |
+          The try-catch covers only the fetch() call (connection, DNS, TLS). The subsequent
+          response.text() reads the body stream and can throw if the connection resets
+          mid-transfer, the AbortSignal fires during body read, or the stream errors. This
+          exception propagates through invokeHttp/invokeGraphql through invoke(). For workflow
+          actions inside interpretWorkflow, it feeds into the fire-and-forget crash path.
+        remediation: |
+          Extend the try-catch to cover response.text(), or add a second try-catch:
+          let bodyText: string; try { bodyText = await response.text(); }
+          catch (err) { return errorResult(`http: body read failed: ${...}`); }.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: [workflow-fire-and-forget-unhandled-rejection]
+          enabled_by: []
+          related: []
+        effort: trivial
+        effort_notes: "Extend existing try-catch by one line, or add a three-line catch."
+
+      - slug: workflow-transition-silent-catch
+        title: "pickTransition silently swallows JSONLogic errors in when: guards"
+        concern: moderate
+        locations:
+          - path: src/runtime/tasks.ts
+            start_line: 669
+            end_line: 684
+        evidence: |
+          async function pickTransition(
+            transitions: TransitionSpec[],
+            workflowCtx: Record<string, unknown>,
+          ): Promise<TransitionSpec | undefined> {
+            for (const t of transitions) {
+              if (t.when === undefined) return t;
+              let matched: unknown;
+              try {
+                matched = await evalJsonLogic(t.when as JsonLogicRule, workflowCtx);
+              } catch {
+                continue;
+              }
+              if (matched) return t;
+            }
+            return undefined;
+          }
+        evidence_markers:
+          - lines: "10-11"
+            type: del
+            label: "Error silently swallowed — transition skipped with no logging"
+        mechanism: |
+          When a JSONLogic when: guard throws (unknown operator, malformed rule, type error),
+          the exception is caught and silently discarded. If all transitions error, the
+          workflow reports "no transition matched" with no indication the problem is a broken
+          guard. Compare to dispatch.ts which explicitly catches and reports guard errors.
+        remediation: |
+          Log guard evaluation errors to stderr before continuing:
+          catch (err) { process.stderr.write(`jig: workflow transition when: guard error:
+          ${err instanceof Error ? err.message : String(err)}\n`); continue; }.
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-16"
+          commit_count: 5
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [workflow-fire-and-forget-unhandled-rejection]
+        effort: trivial
+        effort_notes: "Add one stderr.write line inside existing catch block."
+
+      - slug: get-task-result-null-cast
+        title: "getTaskResult casts potentially null store return to CallToolResult"
+        concern: advisory
+        locations:
+          - path: src/runtime/index.ts
+            start_line: 175
+            end_line: 177
+        evidence: |
+          async getTaskResult(taskId, store) {
+            return (await store.getTaskResult(taskId)) as CallToolResult;
+          },
+        evidence_markers:
+          - lines: "2"
+            type: del
+            label: "Cast bypasses null check — store may return null for incomplete tasks"
+        mechanism: |
+          The SDK's InMemoryTaskStore.getTaskResult can return null when the task has no
+          stored result. The as CallToolResult cast silences TypeScript but does not prevent
+          null from reaching SDK serialization. Compare to getTask one line above which
+          correctly guards with if (!t) throw new Error(...).
+        remediation: |
+          Add a null check: const r = await store.getTaskResult(taskId);
+          if (!r) throw new Error(`tasks/getResult: no result for task "${taskId}"`);
+          return r as CallToolResult;
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-16"
+          commit_count: 18
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 18]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: trivial
+        effort_notes: "One null-check line, matching the pattern in getTask above."
+
+      - slug: status-update-fire-and-forget
+        title: "Task status updates fire-and-forget with errors swallowed"
+        concern: advisory
+        locations:
+          - path: src/runtime/tasks.ts
+            start_line: 566
+            end_line: 570
+        evidence: |
+          void store
+            .updateTaskStatus(taskId, state.mcpStatus, state.statusMessage)
+            .catch(() => {
+              // Swallow — status push is best-effort.
+            });
+        evidence_markers:
+          - lines: "3-4"
+            type: mark
+            label: "Empty catch — status update failures are invisible"
+        mechanism: |
+          Every state transition pushes a status update, but failures are silently swallowed.
+          The comment documents intent ("best-effort"), but if the store is persistently
+          broken, the workflow continues with zero visibility into the problem.
+        remediation: |
+          Log failures to stderr: .catch((err) => { process.stderr.write(`jig: status update
+          for task ${taskId} failed: ${...}\n`); });
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-16"
+          commit_count: 5
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [workflow-fire-and-forget-unhandled-rejection]
+        effort: trivial
+        effort_notes: "Replace empty catch body with stderr.write."
+
+  - slug: config-schema
+    title: "The Config Schema Surface"
+    thesis: "The config validator is thorough — unknown keys are rejected, types are checked, cross-references are validated — but it lacks a version evolution strategy and has consistency gaps at the edges."
+    verdict: "The hand-rolled validator is one of the codebase's strengths: 12+ config blocks get full structural validation with clear, path-specific error messages. The four findings here are all edge-case gaps in an otherwise disciplined system. The schema evolution strategy is the most consequential — adding a version field now, while the alpha user base is zero, costs nothing and prevents a class of future migration pain."
+
+    findings:
+      - slug: no-schema-evolution-strategy
+        title: "YAML config schema has no version field or forward-compatibility strategy"
+        concern: significant
+        locations:
+          - path: src/runtime/config.ts
+            start_line: 318
+            end_line: 332
+        evidence: |
+          export interface JigConfig {
+            server: ServerMetadata;
+            tools: ToolDefinition[];
+            connections?: ConnectionsConfig;
+            /** Startup-time data fetches; resolved before tool registration. */
+            probes?: ProbesConfig;
+            /** MCP resources — boot-registered content endpoints. */
+            resources?: ResourcesConfig;
+            /** MCP prompts — boot-registered named template prompts. */
+            prompts?: PromptsConfig;
+            /** Autocomplete value lists for prompt arguments and template variables. */
+            completions?: CompletionsConfig;
+            /** State-machine workflows referenced by workflow: handlers. */
+            tasks?: TasksConfig;
+          }
+        evidence_markers:
+          - lines: "1-15"
+            type: mark
+            label: "No version/apiVersion field in config root"
+        mechanism: |
+          The YAML config is the primary user-facing API, but it carries no version
+          indicator. The parser accepts whatever YAML it receives. When a future version
+          adds or changes semantics, there is no mechanism to distinguish v1 from v2. The
+          unknown-key rejection provides some forward protection, but does not cover
+          semantic changes to existing fields. Kubernetes apiVersion and Docker Compose
+          version are instructive precedents.
+        remediation: |
+          Add an optional version: field (e.g., version: "1"). The v1 parser accepts
+          configs with version: "1" or no version. Future versions require the field and
+          branch on it.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 22
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: small
+        effort_notes: "Add optional field, validate in parseConfig, document. No behavioral change."
+
+      - slug: response-mode-synonym
+        title: "http and graphql handlers use different names for the non-envelope response mode"
+        concern: moderate
+        locations:
+          - path: src/runtime/config.ts
+            start_line: 81
+            end_line: 81
+          - path: src/runtime/config.ts
+            start_line: 91
+            end_line: 91
+        evidence: |
+          response?: "body" | "envelope";
+        evidence_markers:
+          - lines: "1"
+            type: mark
+            label: "http uses 'body'; graphql uses 'data' — same concept, different name"
+        mechanism: |
+          The http handler's response mode is "body" | "envelope" while graphql is "data" |
+          "envelope". Both control whether the caller sees raw payload or wrapped envelope.
+          A YAML author must remember which synonym applies to which handler type — "body"
+          and "data" are different words for the same concept.
+        remediation: |
+          Unify the non-envelope variant to "body" (the more generic term). Accept "data"
+          as a deprecated alias in graphql for one release cycle.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: small
+        effort_notes: "Type change + deprecation alias; tests update string literal."
+
+      - slug: probe-handler-not-deep-validated
+        title: "Probe http/graphql handlers skip structural validation at parse time"
+        concern: advisory
+        locations:
+          - path: src/runtime/probes.ts
+            start_line: 76
+            end_line: 88
+        evidence: |
+            } else if (e["graphql"] !== undefined) {
+              if (!e["graphql"] || typeof e["graphql"] !== "object") {
+                throw new Error(`config: probes.${name}.graphql must be a mapping`);
+              }
+              handler = { graphql: e["graphql"] } as GraphqlHandler;
+            } else {
+              if (!e["http"] || typeof e["http"] !== "object") {
+                throw new Error(`config: probes.${name}.http must be a mapping`);
+              }
+              handler = { http: e["http"] } as HttpHandler;
+            }
+        evidence_markers:
+          - lines: "5"
+            type: mark
+            label: "Cast without validation — comment acknowledges gap"
+          - lines: "10"
+            type: mark
+            label: "Same cast-without-validation pattern"
+        mechanism: |
+          Probe http and graphql handler blocks are cast to their types without running
+          through validateGraphql/validateHttp. The comment acknowledges this: "Probe-time
+          validation would duplicate that logic." A malformed probe handler only fails at
+          boot when resolveProbes invokes it, with a generic error instead of a parse-time
+          path-specific message.
+        remediation: |
+          Call the existing validateHandler public function on probe handler entries.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 3
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: small
+        effort_notes: "Replace 2 casts with 1 call to existing public function."
+
+      - slug: security-validation-copy-paste
+        title: "validateSecurity repeats identical allow-array validation three times"
+        concern: advisory
+        locations:
+          - path: src/runtime/config.ts
+            start_line: 476
+            end_line: 534
+        evidence: |
+          if (sec["filesystem"] !== undefined) {
+            if (!sec["filesystem"] || typeof sec["filesystem"] !== "object") {
+              throw new Error("config: security.filesystem must be a mapping");
+            }
+            const fs = sec["filesystem"] as Record<string, unknown>;
+            if (fs["allow"] !== undefined) {
+              if (!Array.isArray(fs["allow"])) {
+                throw new Error("config: security.filesystem.allow must be an array of strings");
+              }
+              for (const entry of fs["allow"]) {
+                if (typeof entry !== "string" || entry.length === 0) {
+                  throw new Error("config: security.filesystem.allow entries must be non-empty strings");
+                }
+              }
+              result.filesystem = { allow: fs["allow"] as string[] };
+            } else {
+              result.filesystem = {};
+            }
+          }
+        evidence_markers:
+          - lines: "1-19"
+            type: mark
+            label: "Repeated identically for filesystem, env, and network"
+        mechanism: |
+          Three structurally identical 18-line blocks differ only in key name and error
+          prefix. All three subsystems share the same shape ({ allow?: string[] }). If a
+          fourth is added, the pattern must be copied again.
+        remediation: |
+          Extract validateSecurityBlock(sec, key, path) that validates the mapping +
+          allow-array shape once. Collapses ~54 lines to ~18 + three calls.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 4
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: small
+        effort_notes: "One helper, inline refactor. Error messages become template-driven."
+
+  - slug: network-boundary
+    title: "The Network Boundary Surface"
+    thesis: "The HTTP/exec boundary has proper host allowlisting and timeout enforcement, but the response handling lacks size limits and the default env allowlist is more permissive than necessary."
+    verdict: "The allowlist architecture is sound: configureAccess gates every fetch call through isHostAllowed, connections auto-infer allowed hosts, and the filesystem allowlist uses realpath canonicalization. The response side is where the gaps appear — response.text() reads unbounded bodies into memory, and the default env allowlist includes PATH without requiring opt-in. None of these are exploitable on their own, but the unbounded response body is a denial-of-service vector worth addressing."
+
+    flow:
+      - id: build-request
+        label: "Handler builds request"
+        type: start
+      - id: resolve-headers
+        label: "Resolve connection headers"
+        type: process
+        findings:
+          - slug: connection-headers-re-evaluated-per-request
+            label: "Re-evaluated each time"
+      - id: check-host
+        label: "isHostAllowed()"
+        type: process
+      - id: fetch-call
+        label: "fetch() with timeout"
+        type: process
+      - id: response-ok
+        label: "Response received?"
+        type: decision
+        no: error-return
+      - id: read-body
+        label: "response.text()"
+        type: process
+        findings:
+          - slug: unbounded-http-response-body
+            label: "No size limit"
+      - id: return-result
+        label: "Return to handler"
+        type: end
+      - id: error-return
+        label: "Return error result"
+        type: end
+        spine: false
+
+    findings:
+      - slug: unbounded-http-response-body
+        title: "HTTP response body read into memory without size limit"
+        concern: moderate
+        locations:
+          - path: src/runtime/util/fetch.ts
+            start_line: 73
+            end_line: 73
+        evidence: |
+          const bodyText = await response.text();
+        evidence_markers:
+          - lines: "1"
+            type: del
+            label: "Unbounded read — no max_response_bytes limit"
+        mechanism: |
+          Every HTTP and GraphQL handler funnels through performFetch, which calls
+          response.text() with no size cap. If an upstream API returns a multi-gigabyte
+          response, the entire body is buffered into a single string. Unlike execFile
+          (which has a default maxBuffer of ~1 MB), fetch's response.text() will consume
+          all available heap. In a long-running stdio server, this is the only path
+          where external input can cause unbounded memory growth.
+        remediation: |
+          Read the response in a streaming fashion and enforce a configurable
+          max_response_bytes limit (e.g., 10 MB default). Abort the read and return
+          an isError result if exceeded.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [exec-stdout-default-maxbuffer]
+        effort: small
+        effort_notes: "Streaming reader with byte counter, configurable limit on handler/connection."
+
+      - slug: default-env-allowlist-exposes-path
+        title: "Default env allowlist includes PATH, leaking filesystem layout to JSONLogic"
+        concern: advisory
+        locations:
+          - path: src/runtime/util/access.ts
+            start_line: 27
+            end_line: 35
+        evidence: |
+          export const DEFAULT_ENV_ALLOW: readonly string[] = [
+            "JIG_*",
+            "HOME",
+            "USER",
+            "LANG",
+            "LC_*",
+            "TZ",
+            "PATH",
+          ];
+        evidence_markers:
+          - lines: "8"
+            type: mark
+            label: "PATH exposes installed software and directory layout"
+        mechanism: |
+          When a YAML config omits security.env.allow, the default includes PATH, HOME,
+          and USER. These are accessible via env.get and env.has JSONLogic helpers, available
+          in compute: handlers, when: guards, and transforms. PATH reveals installed software
+          and filesystem structure. The risk requires a YAML author to surface these values
+          to the client, but the default is more permissive than necessary.
+        remediation: |
+          Remove PATH from DEFAULT_ENV_ALLOW. Authors who need it can add it explicitly.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-15"
+          commit_count: 4
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: trivial
+        effort_notes: "One-line removal from the array."
+
+      - slug: connection-headers-re-evaluated-per-request
+        title: "JSONLogic connection headers re-evaluated on every request"
+        concern: advisory
+        locations:
+          - path: src/runtime/connections.ts
+            start_line: 59
+            end_line: 72
+        evidence: |
+          export async function resolveHeaders(
+            compiled: CompiledConnection,
+          ): Promise<Record<string, string>> {
+            const out: Record<string, string> = {};
+            for (const h of compiled.headers) {
+              if (h.kind === "literal") {
+                out[h.name] = h.value;
+                continue;
+              }
+              const val = await evaluate(h.rule, {});
+              out[h.name] = stringify(val);
+            }
+            return out;
+          }
+        evidence_markers:
+          - lines: "10"
+            type: mark
+            label: "Re-evaluates JSONLogic on every call"
+        mechanism: |
+          resolveHeaders is called on every HTTP/GraphQL tool invocation. For connections
+          with env.get-based JSONLogic rules (the common Bearer token pattern), this
+          re-runs the async engine per request. The result is always the same for the
+          process lifetime since env vars don't change.
+        remediation: |
+          Cache resolved header values after first evaluation, keyed by connection name.
+          Add cache_headers: false escape hatch for time-varying rules.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: small
+        effort_notes: "Per-connection Map populated on first call."
+
+      - slug: exec-stdout-default-maxbuffer
+        title: "exec handler relies on Node.js default maxBuffer for stdout"
+        concern: note
+        locations:
+          - path: src/runtime/handlers/exec.ts
+            start_line: 37
+            end_line: 37
+        evidence: |
+          const { stdout } = await execFileAsync(command!, commandArgs);
+        evidence_markers:
+          - lines: "1"
+            type: mark
+            label: "Implicit 1 MB maxBuffer"
+        mechanism: |
+          execFileAsync uses Node.js's default ~1 MB maxBuffer. If a configured command
+          produces more than 1 MB stdout, the call throws ERR_CHILD_PROCESS_STDIO_MAXBUFFER.
+          This is actually a reasonable implicit bound, but it's invisible to YAML authors.
+        remediation: |
+          Consider exposing an optional max_output_bytes field on the exec handler spec.
+          At minimum, document the implicit limit.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 2
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [unbounded-http-response-body]
+        effort: trivial
+        effort_notes: "Passing maxBuffer to execFile is one line; config surface mirrors timeout_ms."
+
+  - slug: code-maintenance
+    title: "The Code Maintenance Surface"
+    thesis: "Handler modules have accumulated three families of duplicated helpers during rapid 4-day development, and the SDK adapter layer (589 LOC) has no unit tests."
+    verdict: "The duplication is normal for a codebase built at this pace — it's a consolidation task, not a design problem. The three stringify copies, two renderJsonLeaves copies, and five errorResult copies are all extraction candidates with clear target locations. The server.ts unit test gap is more consequential: the SDK adapter has multiple branch points that are expensive to exercise through integration tests alone, and the SDK alpha may shift underneath. A focused test file would pay for itself quickly."
+
+    findings:
+      - slug: triplicate-stringify
+        title: "Identical stringify() helper duplicated across three modules"
+        concern: moderate
+        locations:
+          - path: src/runtime/handlers/compute.ts
+            start_line: 41
+            end_line: 46
+          - path: src/runtime/connections.ts
+            start_line: 74
+            end_line: 79
+          - path: src/runtime/util/transform.ts
+            start_line: 57
+            end_line: 62
+        evidence: |
+          function stringify(value: unknown): string {
+            if (typeof value === "string") return value;
+            if (value === null || value === undefined) return String(value);
+            if (typeof value === "number" || typeof value === "boolean") return String(value);
+            return JSON.stringify(value);
+          }
+        evidence_markers:
+          - lines: "1-6"
+            type: mark
+            label: "Identical in compute.ts:41, connections.ts:74, transform.ts:57"
+        mechanism: |
+          Three modules contain character-identical copies. A fourth variant in
+          util/template.ts differs only in null/undefined handling. Any behavior change
+          must be applied in three places independently.
+        remediation: |
+          Extract shared stringify into util/stringify.ts. Keep template.ts's variant
+          separate with a comment explaining the null-as-empty divergence.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [duplicate-render-json-leaves, duplicate-error-result]
+        effort: trivial
+        effort_notes: "One new 6-line file, four 1-line import changes."
+
+      - slug: duplicate-render-json-leaves
+        title: "Identical renderJsonLeaves() duplicated between http.ts and graphql.ts"
+        concern: moderate
+        locations:
+          - path: src/runtime/handlers/http.ts
+            start_line: 107
+            end_line: 118
+          - path: src/runtime/handlers/graphql.ts
+            start_line: 97
+            end_line: 108
+        evidence: |
+          function renderJsonLeaves(value: unknown, data: Record<string, unknown>): unknown {
+            if (typeof value === "string") return render(value, data);
+            if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, data));
+            if (value !== null && typeof value === "object") {
+              const out: Record<string, unknown> = {};
+              for (const [k, v] of Object.entries(value)) {
+                out[k] = renderJsonLeaves(v, data);
+              }
+              return out;
+            }
+            return value;
+          }
+        evidence_markers:
+          - lines: "1-12"
+            type: mark
+            label: "Identical in http.ts:107 and graphql.ts:97"
+        mechanism: |
+          Both private copies recursively walk a value tree and Mustache-render string leaves.
+          A fix in one (e.g., depth guard, Date handling) must be manually replicated.
+        remediation: |
+          Move to util/template.ts alongside the existing render function.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [triplicate-stringify]
+        effort: trivial
+        effort_notes: "Move one function, add two imports."
+
+      - slug: no-unit-tests-server-adapter
+        title: "server.ts SDK adapter (589 LOC) has no unit tests"
+        concern: moderate
+        locations:
+          - path: src/runtime/server.ts
+            start_line: 319
+            end_line: 589
+        evidence: |
+          export function createServer(
+            config: JigConfig,
+            probe: Record<string, unknown>,
+          ): JigServerHandle {
+            const server = new McpServer(
+              {
+                name: config.server.name,
+                version: config.server.version,
+              },
+              {
+                capabilities: {
+                  tools: { listChanged: true },
+                  tasks: {
+                    taskStore: new InMemoryTaskStore(),
+                    requests: { tools: { call: true } } as Record<string, unknown>,
+                  },
+                },
+              },
+            );
+        evidence_markers:
+          - lines: "1-19"
+            type: mark
+            label: "createServer entry point — no direct unit tests"
+        mechanism: |
+          server.ts is the SDK quarantine boundary containing McpServer construction, tool/
+          resource/prompt/task registration adapters, subscription tracking, and completions
+          wiring. Coverage is entirely through integration tests (integration.test.ts) which
+          spawn the full runtime. Regressions in the adapter — no-schema branch of
+          registerTool, prompt-args-schema bridging, completions handler — require process
+          spawning to detect. The SDK alpha may shift.
+        remediation: |
+          Add tests/server.test.ts exercising JigServerHandle methods at the function level.
+          Focus on branching: registerTool with/without inputSchema, registerToolTask,
+          wireCompletions filtering.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 12
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: medium
+        effort_notes: "Requires mocking or stubbing McpServer. Estimated 150-200 lines."
+
+      - slug: duplicate-error-result
+        title: "Behaviorally identical errorResult() helper duplicated across five handler modules"
+        concern: advisory
+        locations:
+          - path: src/runtime/handlers/exec.ts
+            start_line: 44
+            end_line: 49
+          - path: src/runtime/util/fetch.ts
+            start_line: 103
+            end_line: 105
+        evidence: |
+          function errorResult(message: string): ToolCallResult {
+            return {
+              content: [{ type: "text", text: message }],
+              isError: true,
+            };
+          }
+        evidence_markers:
+          - lines: "1-6"
+            type: mark
+            label: "6-line variant in exec.ts and dispatch.ts (param: message)"
+        mechanism: |
+          Five handler-adjacent modules define private errorResult helpers with identical
+          behavior but two formatting variants: exec.ts and dispatch.ts use a 6-line form
+          with parameter named "message", while fetch.ts, http.ts, and graphql.ts use a
+          compact 3-line form with parameter named "text" and property shorthand. All
+          produce the same { content: [{ type: "text", text }], isError: true } shape.
+          Five copies means a shape change requires five coordinated edits.
+        remediation: |
+          Export shared errorResult from handlers/types.ts.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [triplicate-stringify]
+        effort: trivial
+        effort_notes: "One new export, five import additions."
+
+      - slug: getengine-exported-from-util
+        title: "getEngine() exports mutable engine handle from utility module"
+        concern: advisory
+        locations:
+          - path: src/runtime/util/jsonlogic.ts
+            start_line: 51
+            end_line: 53
+        evidence: |
+          export function getEngine(): AsyncLogicEngine {
+            return engine;
+          }
+        evidence_markers:
+          - lines: "1-3"
+            type: mark
+            label: "Exports singleton with full addMethod/addOperation surface"
+        mechanism: |
+          getEngine() returns the singleton engine with full mutation surface. The JSDoc
+          says "Not exported — callers outside the runtime cannot mutate the engine" but
+          it IS exported. Only helpers.ts consumes it. The project is private, so no
+          external risk, but it contradicts stated intent.
+        remediation: |
+          Remove the export keyword — helpers.ts is in the same util/ directory. Or narrow
+          the return type to just the registration surface.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: trivial
+        effort_notes: "Remove one 'export' keyword."
+
+      - slug: dead-re-export-inline
+        title: "handlers/inline.ts re-exports ToolCallResult but no consumer imports it"
+        concern: note
+        locations:
+          - path: src/runtime/handlers/inline.ts
+            start_line: 4
+            end_line: 4
+        evidence: |
+          export type { ToolCallResult };
+        evidence_markers:
+          - lines: "1"
+            type: mark
+            label: "Unused re-export — all consumers import from types.ts"
+        mechanism: |
+          inline.ts re-exports ToolCallResult from handlers/types.ts, but no module imports
+          it from inline.ts. Vestigial from early development. Can confuse IDE auto-import.
+        remediation: |
+          Remove the export type line and its corresponding import.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: trivial
+        effort_notes: "Delete two lines."
+
+  - slug: completeness
+    title: "The Completeness Surface"
+    thesis: "The runtime delivers all 10 planned capabilities (Plans 1-9), but the project has no user-facing documentation and the designed CLI surface does not exist yet."
+    verdict: "For a 4-day-old alpha, the runtime completeness is impressive — tools, resources, prompts, completions, tasks, elicitation, probes, connections, security, and watchers all work as exercised by integration tests and smoke recipes. The gaps are all about packaging, not functionality: no README, no CLI, no HTTP transport, and a pre-declared capability that isn't fired yet. The documentation gap is the most impactful because it blocks discoverability — the content already exists across design docs and examples, it just needs assembly."
+
+    findings:
+      - slug: no-user-facing-documentation
+        title: "No README or user-facing documentation exists"
+        concern: significant
+        locations:
+          - path: package.json
+            start_line: 1
+            end_line: 5
+        evidence: |
+          {
+            "name": "jig",
+            "version": "1.0.0-alpha.0",
+            "description": "YAML-driven single-file MCP server packaging tool",
+            "type": "module",
+        evidence_markers:
+          - lines: "1-5"
+            type: mark
+            label: "package.json is the only external-facing description"
+        mechanism: |
+          No README.md, no docs/ directory, no CONTRIBUTING.md. A developer sees only the
+          one-line package.json description. The 10 example YAML files have good inline
+          comments, but there is no document explaining how to run the runtime, what YAML
+          schema fields exist, or what the project does. Design docs in record/ are internal
+          architecture documents, not user-facing.
+        remediation: |
+          Add a README.md covering: what jig is, how to run it (node
+          --experimental-transform-types src/runtime/index.ts --config <path>), the YAML
+          schema sections, handler types, and links to examples.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 77
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 77]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [cli-surface-not-implemented]
+        effort: small
+        effort_notes: "Content exists across design docs and examples — needs assembly."
+
+      - slug: cli-surface-not-implemented
+        title: "Documented CLI commands (jig new/dev/validate/build) do not exist"
+        concern: advisory
+        locations:
+          - path: record/designs/2026-04-13-jig-design.md
+            start_line: 49
+            end_line: 56
+        evidence: |
+          jig new [TEMPLATE]                  # scaffold a new jig.yaml
+          jig dev [JIG.YAML]                  # run as MCP server with hot-reload (author dev loop)
+          jig validate JIG.YAML               # lint + type-check the YAML (CI-friendly)
+          jig build JIG.YAML -o OUT.mjs       # bundle to single-file ESM (default)
+          jig build --target mcpb JIG.YAML -o OUT.mcpb   # wrap as Claude Desktop bundle
+          jig build --bare -o OUT.mjs         # generic engine, no embedded YAML
+          jig build --with-oauth ...          # opt-in feature bundles
+        evidence_markers:
+          - lines: "1-7"
+            type: mark
+            label: "CLI surface described in design doc, not yet implemented"
+        mechanism: |
+          The design document describes six CLI commands. None exist — no src/cli/, no bin
+          entry in package.json. The handoff explicitly acknowledges: "No CLI exists yet —
+          Plan 10 builds it." Rated advisory because the design doc is an internal plan, not
+          user documentation.
+        remediation: |
+          Implement Plan 10 (CLI). Ensure interim documentation describes the current
+          invocation method rather than planned CLI commands.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 77
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 77]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [no-user-facing-documentation]
+        effort: large
+        effort_notes: "Plan 10 is a full implementation phase."
+
+      - slug: stdio-only-transport
+        title: "Only stdio transport implemented; HTTP transport described in design is absent"
+        concern: note
+        locations:
+          - path: src/runtime/transports/stdio.ts
+            start_line: 1
+            end_line: 17
+        evidence: |
+          import {
+            StdioServerTransport,
+            type Transport,
+          } from "@modelcontextprotocol/server";
+
+          export function createStdioTransport(): Transport {
+            return new StdioServerTransport();
+          }
+        evidence_markers:
+          - lines: "6-8"
+            type: mark
+            label: "Only stdio transport in transports/"
+        mechanism: |
+          The design document lists transports/http.ts and describes "two transports (stdio +
+          HTTP) in one binary." The implementation only provides stdio. This is a note because
+          stdio is correct for v1's use case (local MCP servers as subprocesses), the project
+          is alpha, and the server.ts adapter already accepts a Transport interface.
+        remediation: |
+          Add Streamable HTTP transport when remote/multi-client MCP use cases arise.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: medium
+        effort_notes: "SDK provides StreamableHTTPServerTransport; needs session management."
+
+      - slug: tools-list-changed-advertised-never-fired
+        title: "Server advertises tools.listChanged capability but never fires the notification"
+        concern: note
+        locations:
+          - path: src/runtime/server.ts
+            start_line: 333
+            end_line: 337
+        evidence: |
+                  // Accurate up front: a later plan adds YAML hot-reload, which
+                  // will call sendToolListChanged(). Pre-declaring the capability
+                  // also means `initialize` advertises it even before Phase 4
+                  // registers the first tool.
+                  tools: { listChanged: true },
+        evidence_markers:
+          - lines: "5"
+            type: mark
+            label: "listChanged: true advertised but sendToolListChanged never called"
+        mechanism: |
+          The server declares tools.listChanged: true but no code path fires
+          notifications/tools/list_changed. The comment explains it is pre-declared for
+          future hot-reload. A well-behaved client won't break (fewer notifications is
+          benign), but it is a minor capability overstatement.
+        remediation: |
+          Remove listChanged: true until hot-reload lands, or leave as-is — the comment
+          documents the intent.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 12
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: trivial
+        effort_notes: "One-line removal, or no change if intentional."
+
+  - slug: supply-chain
+    title: "The Supply Chain Surface"
+    thesis: "The dependency tree is minimal and advisory-free — four production dependencies, all actively maintained, with zero npm audit findings."
+    verdict: "This is one of the cleanest dependency profiles possible for an MCP server runtime. The only note is the pinned alpha on the MCP SDK, which is the expected state for a project tracking an alpha protocol. The supply chain is not a concern area for this audit."
+
+    findings:
+      - slug: mcp-server-pinned-alpha
+        title: "@modelcontextprotocol/server pinned to exact alpha pre-release"
+        concern: advisory
+        locations:
+          - path: package.json
+            start_line: 16
+            end_line: 16
+        evidence: |
+          "@modelcontextprotocol/server": "2.0.0-alpha.2",
+        evidence_markers:
+          - lines: "1"
+            type: mark
+            label: "Exact pin to alpha pre-release"
+        mechanism: |
+          The MCP server SDK is pinned to exact version 2.0.0-alpha.2 rather than a
+          caret/tilde range. Only two alpha releases exist. The exact pin means npm install
+          will never pick up patch fixes without a manual edit. The pin is defensible — alpha
+          APIs carry inherent breakage risk — but it creates a manual update burden as the
+          SDK iterates toward stability.
+        remediation: |
+          No immediate action. When a stable 2.0.0 ships, switch to "^2.0.0".
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-14"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: trivial
+        effort_notes: "One-line version specifier change when stable release available."
+
+summary:
+  counts:
+    critical: 0
+    significant: 4
+    moderate: 11
+    advisory: 10
+    note: 4
