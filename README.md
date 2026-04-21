@@ -90,24 +90,6 @@ jig dev
 
 Point Claude Desktop or Claude Code at the server:
 
-```json
-{
-  "mcpServers": {
-    "my-server": {
-      "command": "node",
-      "args": [
-        "--experimental-transform-types",
-        "/absolute/path/to/jig/src/runtime/index.ts",
-        "--config",
-        "/absolute/path/to/your/jig.yaml"
-      ]
-    }
-  }
-}
-```
-
-Replace both `/absolute/path/to/` entries with real paths on your machine. GUI MCP clients like Claude Desktop don't inherit your shell's `PATH`, so absolute paths are required.
-
 ### 4. Build a standalone server
 
 ```sh
@@ -115,10 +97,9 @@ jig build jig.yaml -o server.mjs
 # ok: server.mjs (1065 KB)
 ```
 
-The output is a single file. Ship it anywhere:
+The output is a single file with no dependencies beyond Node 24:
 
 ```sh
-# End user runs:
 node server.mjs
 ```
 
@@ -128,6 +109,23 @@ For a generic server that reads YAML at runtime:
 jig build --bare -o server.mjs
 # End user drops their jig.yaml next to server.mjs
 ```
+
+### 5. Configure an MCP client
+
+Point Claude Desktop or Claude Code at the built server:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "node",
+      "args": ["/absolute/path/to/server.mjs"]
+    }
+  }
+}
+```
+
+Replace the path with wherever you put the built `.mjs`. That's it — no flags, no config files, no `node_modules`.
 
 ## Serving over HTTP
 
