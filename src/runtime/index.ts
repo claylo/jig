@@ -8,6 +8,7 @@ import { invoke } from "./handlers/index.ts";
 import { toolToInputSchema } from "./tools.ts";
 import { interpretWorkflow, type ElicitParams, type ElicitResponse } from "./tasks.ts";
 import { createStdioTransport } from "./transports/stdio.ts";
+import { createHttpTransport } from "./transports/http.ts";
 import { resolveDispatchCase } from "./handlers/dispatch.ts";
 import { evaluate } from "./util/jsonlogic.ts";
 import { configureAccess, isHostAllowed } from "./util/access.ts";
@@ -263,7 +264,17 @@ async function main(): Promise<void> {
     server.wireCompletions(config.completions);
   }
 
-  await server.connect(createStdioTransport());
+  const portArg = parsePortArg(process.argv.slice(2));
+  if (portArg !== undefined) {
+    const http = createHttpTransport({ port: portArg });
+    await server.connect(http.transport);
+    const addr = await http.listening;
+    process.stderr.write(
+      `jig: serving MCP over HTTP at http://${addr.hostname}:${addr.port}/mcp\n`,
+    );
+  } else {
+    await server.connect(createStdioTransport());
+  }
 }
 
 /**
@@ -273,6 +284,22 @@ async function main(): Promise<void> {
  * Normalize both shapes to `Record<string, unknown>` so handlers can
  * read fields without defensive checks at every call site.
  */
+function parsePortArg(argv: string[]): number | undefined {
+  const idx = argv.indexOf("--port");
+  if (idx === -1) return undefined;
+  const raw = argv[idx + 1];
+  if (raw === undefined) {
+    process.stderr.write("jig: --port requires a port number\n");
+    process.exit(1);
+  }
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    process.stderr.write(`jig: invalid port "${raw}"\n`);
+    process.exit(1);
+  }
+  return port;
+}
+
 function normalizeArgs(args: unknown): Record<string, unknown> {
   if (args && typeof args === "object" && !Array.isArray(args)) {
     return args as Record<string, unknown>;
