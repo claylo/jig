@@ -4,6 +4,9 @@
   "description": "YAML-driven single-file MCP server packaging tool",
   "type": "module",
   "private": true,
+  "bin": {
+    "jig": "src/cli/index.ts"
+  },
   "engines": {
     "node": ">=24"
   },
@@ -14,6 +17,7 @@
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/server": "2.0.0-alpha.2",
+    "esbuild": "^0.28.0",
     "json-logic-engine": "^5.0.0",
     "yaml": "^2.8.3"
   },
