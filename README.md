@@ -88,8 +88,6 @@ jig dev
 # → MCP server running over stdio, hot-reload enabled
 ```
 
-Point Claude Desktop or Claude Code at the server:
-
 ### 4. Build a standalone server
 
 ```sh
