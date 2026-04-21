@@ -1,10 +1,21 @@
 import { parseArgs } from "node:util";
-import { resolve } from "node:path";
-import { readFileSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { loadConfigFromFile } from "../runtime/config.ts";
 
-const RUNTIME_ENTRY = new URL("../runtime/index.ts", import.meta.url).pathname;
+function findRuntimeEntry(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(dir, "src", "runtime", "index.ts");
+    if (existsSync(candidate)) return candidate;
+    dir = dirname(dir);
+  }
+  throw new Error("jig build: cannot find src/runtime/index.ts");
+}
+
+const RUNTIME_ENTRY = findRuntimeEntry();
 
 const USAGE = `jig build — bundle a jig config into a standalone .mjs
 

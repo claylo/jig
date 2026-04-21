@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { parseArgs } from "node:util";
 
 const USAGE = `jig — YAML-driven MCP server toolkit

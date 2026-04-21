@@ -5,12 +5,13 @@
   "type": "module",
   "private": true,
   "bin": {
-    "jig": "src/cli/index.ts"
+    "jig": "bin/jig"
   },
   "engines": {
     "node": ">=24"
   },
   "scripts": {
+    "build": "node --experimental-transform-types scripts/build-cli.ts",
     "test": "node --test --experimental-transform-types 'tests/**/*.test.ts'",
     "check": "tsc --noEmit"
   },

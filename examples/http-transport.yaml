@@ -1,0 +1,49 @@
+# Serve MCP over HTTP instead of stdio.
+#
+# Run with:
+#   node --experimental-transform-types src/runtime/index.ts \
+#     --config examples/http-transport.yaml --port 3000
+#
+# Or via the CLI:
+#   jig dev examples/http-transport.yaml --port 3000
+#
+# Test with curl:
+#   curl -X POST http://127.0.0.1:3000/mcp \
+#     -H "Content-Type: application/json" \
+#     -H "Accept: application/json, text/event-stream" \
+#     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0.1"}}}'
+#
+# The --port flag switches from stdio to Streamable HTTP transport.
+# Without --port, the server uses stdio (the default for MCP clients
+# like Claude Desktop and Claude Code).
+
+version: "1"
+server:
+  name: jig-http-example
+  version: "1.0.0"
+  description: |
+    Demonstrates serving MCP over HTTP. Same tools, different transport.
+    Connect any HTTP-capable MCP client to http://localhost:3000/mcp.
+
+tools:
+  - name: status
+    description: Return server status and uptime info.
+    handler:
+      compute:
+        cat:
+          - '{"status":"ok","transport":"http","uptime_ms":'
+          - { "time.now": [] }
+          - "}"
+
+  - name: echo
+    description: Echo back whatever you send.
+    input:
+      message:
+        type: string
+        required: true
+        description: The message to echo back.
+    handler:
+      compute:
+        cat:
+          - "echo: "
+          - { var: "message" }

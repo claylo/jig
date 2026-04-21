@@ -16,6 +16,10 @@ check:
 test:
     npm test
 
+# Build the CLI to dist/jig.mjs
+build-cli:
+    npm run build
+
 # Smoke test: launch the runtime against examples/minimal.yaml, send one
 # initialize request, print the response. Exit non-zero if the
 # initialize response doesn't arrive on stdout.

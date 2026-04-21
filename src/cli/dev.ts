@@ -1,9 +1,20 @@
 import { parseArgs } from "node:util";
-import { resolve, dirname } from "node:path";
-import { watch } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { watch, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 
-const RUNTIME_PATH = new URL("../runtime/index.ts", import.meta.url).pathname;
+function findRuntimePath(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(dir, "src", "runtime", "index.ts");
+    if (existsSync(candidate)) return candidate;
+    dir = dirname(dir);
+  }
+  throw new Error("jig dev: cannot find src/runtime/index.ts");
+}
+
+const RUNTIME_PATH = findRuntimePath();
 
 const USAGE = `jig dev — run an MCP server with hot-reload
 
