@@ -3,12 +3,17 @@ import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const EXAMPLES_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "examples",
-);
+function findExamplesDir(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(dir, "examples");
+    if (existsSync(candidate)) return candidate;
+    dir = dirname(dir);
+  }
+  throw new Error("jig new: cannot find examples directory");
+}
+
+const EXAMPLES_DIR = findExamplesDir();
 
 const USAGE = `jig new — scaffold a new jig.yaml
 
