@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfigFromFile, resolveConfigPath } from "./config.ts";
+import { loadConfigFromFile, parseConfig, resolveConfigPath } from "./config.ts";
+import { embeddedYaml } from "./embedded-config.ts";
 import { createServer, type CallToolResult, type JigTaskHandler, type ToolHandler } from "./server.ts";
 import { registerResources, startWatchers } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
@@ -19,11 +20,12 @@ import { resolveProbes } from "./probes.ts";
 // above triggers it.
 
 async function main(): Promise<void> {
-  const configPath = resolveConfigPath({
-    argv: process.argv.slice(2),
-    runtimeUrl: import.meta.url,
-  });
-  const config = loadConfigFromFile(configPath);
+  const config = embeddedYaml !== null
+    ? parseConfig(embeddedYaml)
+    : loadConfigFromFile(resolveConfigPath({
+        argv: process.argv.slice(2),
+        runtimeUrl: import.meta.url,
+      }));
 
   const runtimeRoot = dirname(fileURLToPath(import.meta.url));
   configureAccess(config.server.security ?? {}, runtimeRoot, config.connections);
