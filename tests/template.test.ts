@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { render } from "../src/runtime/util/template.ts";
+import { render, renderUriEncoded } from "../src/runtime/util/template.ts";
 
 test("render substitutes a single variable", () => {
   assert.equal(render("hello {{name}}", { name: "world" }), "hello world");
@@ -50,4 +50,41 @@ test("render substitutes the same token multiple times", () => {
 
 test("render leaves unclosed braces as literal text", () => {
   assert.equal(render("hello {{name", { name: "ignored" }), "hello {{name");
+});
+
+// ─── renderUriEncoded ────────────────────────────────────────────────
+
+test("renderUriEncoded encodes path traversal in interpolated values", () => {
+  assert.equal(
+    renderUriEncoded("/items/{{id}}", { id: "../admin" }),
+    "/items/..%2Fadmin",
+  );
+});
+
+test("renderUriEncoded encodes query characters in interpolated values", () => {
+  assert.equal(
+    renderUriEncoded("/items/{{id}}", { id: "foo?bar=baz" }),
+    "/items/foo%3Fbar%3Dbaz",
+  );
+});
+
+test("renderUriEncoded leaves literal path text unchanged", () => {
+  assert.equal(
+    renderUriEncoded("/items/{{id}}/details", { id: "123" }),
+    "/items/123/details",
+  );
+});
+
+test("renderUriEncoded encodes spaces in interpolated values", () => {
+  assert.equal(
+    renderUriEncoded("/search/{{q}}", { q: "hello world" }),
+    "/search/hello%20world",
+  );
+});
+
+test("renderUriEncoded does not double-encode literal percent signs", () => {
+  assert.equal(
+    renderUriEncoded("/path%20with/{{id}}", { id: "ok" }),
+    "/path%20with/ok",
+  );
 });

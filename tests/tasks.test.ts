@@ -1090,6 +1090,80 @@ test("interpreter renders elicitation fields in terminal result text", async () 
   assert.equal(r.content[0]!.text, "Hello Clay!");
 });
 
+test("interpreter logs to stderr when storeTaskResult rejects", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "boom",
+        states: {
+          boom: {
+            mcpStatus: "working",
+            actions: [{ exec: ["/does/not/exist-xyz"] }],
+            on: [{ target: "done" }],
+          },
+          done: { mcpStatus: "completed", result: { text: "unreachable" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  // Override storeTaskResult to always reject.
+  tracker.store.storeTaskResult = async () => {
+    throw new Error("store unavailable");
+  };
+  // interpretWorkflow should NOT throw — fail() catches the store rejection
+  // and writes to stderr instead.
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+    elicit: noopElicit,
+  });
+  // The store rejected, so nothing landed in results.
+  assert.equal(tracker.results.length, 0);
+});
+
+test("interpreter surfaces guard error in task failure message", async () => {
+  const cfg = validateTasks(
+    {
+      w: {
+        initial: "check",
+        states: {
+          check: {
+            mcpStatus: "working",
+            actions: [{ inline: { text: "ok" } }],
+            on: [
+              { when: { "nonexistent_op": [1] }, target: "done" },
+            ],
+          },
+          done: { mcpStatus: "completed", result: { text: "unreachable" } },
+        },
+      },
+    },
+    validateHandlerPublic,
+  );
+  const tracker = makeTrackingStore();
+  await interpretWorkflow({
+    workflow: cfg!["w"]!,
+    args: {},
+    ctx: { connections: {}, probe: {} },
+    store: tracker.store,
+    taskId: "stub-task",
+    invoke: invokeHandler,
+    elicit: noopElicit,
+  });
+  assert.equal(tracker.results[0]!.status, "failed");
+  const r = tracker.results[0]!.result as { content: Array<{ text: string }>; isError?: boolean };
+  assert.ok(r.isError);
+  // Must surface the guard error, NOT the generic "no transition matched" message.
+  assert.match(r.content[0]!.text, /guard.*threw|guard.*error/i);
+  assert.doesNotMatch(r.content[0]!.text, /no transition matched/i);
+});
+
 // ─── Cross-ref tests ──────────────────────────────────────────────────
 
 test("config rejects a workflow handler on a tool without execution.taskSupport", () => {
