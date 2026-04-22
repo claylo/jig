@@ -454,11 +454,6 @@ function validateTransition(
 
 // ─── Interpreter ──────────────────────────────────────────────────────
 
-/**
- * Minimal task-store surface the interpreter needs. Mirrors a subset of
- * the SDK's RequestTaskStore but exposed as a plain interface so unit
- * tests can substitute a tracking double without touching the SDK.
- */
 export interface InterpreterTaskStore {
   storeTaskResult(
     taskId: string,
@@ -472,11 +467,6 @@ export interface InterpreterTaskStore {
   ): Promise<void>;
 }
 
-/**
- * Jig-owned elicitation request shape. The interpreter builds this from
- * the state's ElicitationSpec; the adapter in server.ts translates it
- * to the SDK's ElicitRequestFormParams. Keeps tasks.ts SDK-free.
- */
 export interface ElicitParams {
   message: string;
   requestedSchema: {
@@ -486,10 +476,6 @@ export interface ElicitParams {
   };
 }
 
-/**
- * Jig-owned elicitation response shape. Mirrors the SDK's ElicitResult
- * but with a narrower content type.
- */
 export interface ElicitResponse {
   action: "accept" | "decline" | "cancel";
   content?: Record<string, unknown>;
@@ -509,38 +495,29 @@ export interface InterpretWorkflowOptions {
   elicit: (params: ElicitParams) => Promise<ElicitResponse>;
 }
 
-/**
- * Drive a state-machine workflow to a terminal result.
- *
- * Algorithm:
- *   1. start = workflow.initial
- *   2. for each state:
- *      a. updateTaskStatus(taskId, mcpStatus, statusMessage)
- *      b. if state has actions, run each in declared order via invoke();
- *         the result of the LAST action becomes workflowCtx.result
- *         (parsed as JSON if the text content parses, else raw text)
- *      c. if any action returns isError: true OR throws, transition
- *         immediately to a synthesized failed terminal with the error
- *         text as result, then return
- *      d. if state is terminal, render result.text via Mustache against
- *         { input, result, probe }, storeTaskResult, then return
- *      e. evaluate state.on transitions in declaration order; pick the
- *         first whose `when` evaluates truthy (or has no `when`); set
- *         current = transition.target; loop
- *      f. if no transition matches, storeTaskResult with failed status
- *         and an "interpreter: no transition matched" error message;
- *         return
- */
+interface WorkflowCtx {
+  [key: string]: unknown;
+  input: Record<string, unknown>;
+  result: unknown;
+  probe: Record<string, unknown>;
+  elicitation: Record<string, unknown>;
+}
+
+type StepOutcome =
+  | { kind: "advance"; target: string }
+  | { kind: "terminal" }
+  | { kind: "failed"; message: string };
+
+const MAX_STEPS = 1024;
+
+// ─── Top-level orchestrator ──────────────────────────────────────────
+
 export async function interpretWorkflow(
   opts: InterpretWorkflowOptions,
 ): Promise<void> {
-  const { workflow, args, ctx, store, taskId, invoke, elicit } = opts;
-  const workflowCtx: {
-    input: Record<string, unknown>;
-    result: unknown;
-    probe: Record<string, unknown>;
-    elicitation: Record<string, unknown>;
-  } = {
+  const { workflow, args, ctx, store, taskId } = opts;
+
+  const wCtx: WorkflowCtx = {
     input: args,
     result: undefined,
     probe: ctx.probe,
@@ -548,157 +525,192 @@ export async function interpretWorkflow(
   };
 
   let current = workflow.initial;
-  const MAX_STEPS = 1024;
-  let steps = 0;
 
-  while (steps++ < MAX_STEPS) {
+  for (let step = 0; step < MAX_STEPS; step++) {
     const state = workflow.states[current];
     if (!state) {
-      await safeFail(
-        store,
-        taskId,
-        `interpreter: state "${current}" not declared (this is a jig bug — should have been caught at parse time)`,
-      );
+      await fail(store, taskId,
+        `interpreter: state "${current}" not declared (this is a jig bug — should have been caught at parse time)`);
       return;
     }
 
-    void store
-      .updateTaskStatus(taskId, state.mcpStatus, state.statusMessage)
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`jig: status update failed for task ${taskId}: ${msg}\n`);
-      });
+    emitStatus(store, taskId, state);
 
-    // ── input_required: elicit and bind ──
-    if (state.mcpStatus === "input_required" && state.elicitation !== undefined) {
-      let elicitResult: ElicitResponse;
-      try {
-        elicitResult = await elicit({
-          message: state.elicitation.message,
-          requestedSchema: buildRequestedSchema(state.elicitation),
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        await safeFail(
-          store,
-          taskId,
-          `elicitation failed in state "${current}": ${message}`,
-        );
+    const outcome = await executeState(state, current, wCtx, opts);
+
+    switch (outcome.kind) {
+      case "terminal":
         return;
-      }
-      // Bind response: action is always present; content fields spread in.
-      workflowCtx.elicitation = {
-        action: elicitResult.action,
-        ...(elicitResult.content ?? {}),
-      };
-      // Fall through to transition evaluation (no actions on input_required states).
+      case "failed":
+        await fail(store, taskId, outcome.message);
+        return;
+      case "advance":
+        current = outcome.target;
+        break;
     }
-
-    // Run actions in sequence; capture each result; the last one wins.
-    if (state.actions !== undefined) {
-      let actionResult: ToolCallResult | undefined;
-      for (let i = 0; i < state.actions.length; i++) {
-        try {
-          actionResult = await invoke(state.actions[i]!, args, ctx);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await safeFail(
-            store,
-            taskId,
-            `action ${i} (state "${current}") threw: ${message}`,
-          );
-          return;
-        }
-        if (actionResult.isError) {
-          const text = actionResult.content[0]?.text ?? "<no error text>";
-          await safeFail(
-            store,
-            taskId,
-            `action ${i} (state "${current}") failed: ${text}`,
-          );
-          return;
-        }
-      }
-      if (actionResult !== undefined) {
-        workflowCtx.result = parseActionResult(actionResult);
-      }
-    }
-
-    // Terminal state? Render and store.
-    if (state.result !== undefined) {
-      const rendered = render(state.result.text, workflowCtx);
-      const storeStatus: "completed" | "failed" =
-        state.mcpStatus === "failed" ? "failed" : "completed";
-      const finalResult: CallToolResult = {
-        content: [{ type: "text", text: rendered }],
-        ...(storeStatus === "failed" && { isError: true }),
-      };
-      await store.storeTaskResult(taskId, storeStatus, finalResult);
-      return;
-    }
-
-    // Pick the first matching transition.
-    if (state.on === undefined || state.on.length === 0) {
-      await safeFail(
-        store,
-        taskId,
-        `interpreter: state "${current}" is non-terminal but has no on: transitions`,
-      );
-      return;
-    }
-
-    const { transition: next, guardError } = await pickTransition(state.on, workflowCtx);
-    if (next === undefined) {
-      const reason = guardError
-        ? `guard error in state "${current}": ${guardError}`
-        : `no transition matched in state "${current}" — workflow stalled`;
-      await safeFail(store, taskId, `interpreter: ${reason}`);
-      return;
-    }
-    current = next.target;
   }
 
-  await safeFail(
-    store,
-    taskId,
-    `interpreter: max steps (${MAX_STEPS}) exceeded — likely a transition loop`,
-  );
+  await fail(store, taskId,
+    `interpreter: max steps (${MAX_STEPS}) exceeded — likely a transition loop`);
 }
 
-interface TransitionResult {
-  transition?: TransitionSpec;
-  guardError?: string;
+// ─── Per-state dispatch ──────────────────────────────────────────────
+
+async function executeState(
+  state: StateSpec,
+  stateName: string,
+  wCtx: WorkflowCtx,
+  opts: InterpretWorkflowOptions,
+): Promise<StepOutcome> {
+
+  if (state.mcpStatus === "input_required" && state.elicitation !== undefined) {
+    const result = await runElicitation(state.elicitation, stateName, wCtx, opts);
+    if (result.kind !== "advance") return result;
+  }
+
+  if (state.actions !== undefined) {
+    const result = await runActions(state.actions, stateName, wCtx, opts);
+    if (result.kind !== "advance") return result;
+  }
+
+  if (state.result !== undefined) {
+    await renderTerminal(state, wCtx, opts);
+    return { kind: "terminal" };
+  }
+
+  return resolveTransition(state, stateName, wCtx);
 }
 
-async function pickTransition(
-  transitions: TransitionSpec[],
-  workflowCtx: Record<string, unknown>,
-): Promise<TransitionResult> {
+// ─── Elicitation ─────────────────────────────────────────────────────
+
+async function runElicitation(
+  spec: ElicitationSpec,
+  stateName: string,
+  wCtx: WorkflowCtx,
+  opts: InterpretWorkflowOptions,
+): Promise<StepOutcome> {
+  let response: ElicitResponse;
+  try {
+    response = await opts.elicit({
+      message: spec.message,
+      requestedSchema: buildRequestedSchema(spec),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { kind: "failed", message: `elicitation failed in state "${stateName}": ${msg}` };
+  }
+
+  wCtx.elicitation = {
+    action: response.action,
+    ...(response.content ?? {}),
+  };
+
+  // Signal "continue to transitions" — not a real state advance.
+  return { kind: "advance", target: "" };
+}
+
+// ─── Action execution ────────────────────────────────────────────────
+
+async function runActions(
+  actions: Handler[],
+  stateName: string,
+  wCtx: WorkflowCtx,
+  opts: InterpretWorkflowOptions,
+): Promise<StepOutcome> {
+  let last: ToolCallResult | undefined;
+
+  for (let i = 0; i < actions.length; i++) {
+    let result: ToolCallResult;
+    try {
+      result = await opts.invoke(actions[i]!, opts.args, opts.ctx);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { kind: "failed", message: `action ${i} (state "${stateName}") threw: ${msg}` };
+    }
+    if (result.isError) {
+      const text = result.content[0]?.text ?? "<no error text>";
+      return { kind: "failed", message: `action ${i} (state "${stateName}") failed: ${text}` };
+    }
+    last = result;
+  }
+
+  if (last !== undefined) {
+    wCtx.result = parseActionResult(last);
+  }
+
+  return { kind: "advance", target: "" };
+}
+
+// ─── Terminal rendering ──────────────────────────────────────────────
+
+async function renderTerminal(
+  state: StateSpec,
+  wCtx: WorkflowCtx,
+  opts: InterpretWorkflowOptions,
+): Promise<void> {
+  const rendered = render(state.result!.text, wCtx);
+  const status: "completed" | "failed" =
+    state.mcpStatus === "failed" ? "failed" : "completed";
+  const result: CallToolResult = {
+    content: [{ type: "text", text: rendered }],
+    ...(status === "failed" && { isError: true }),
+  };
+  await opts.store.storeTaskResult(opts.taskId, status, result);
+}
+
+// ─── Transition resolution ───────────────────────────────────────────
+
+async function resolveTransition(
+  state: StateSpec,
+  stateName: string,
+  wCtx: WorkflowCtx,
+): Promise<StepOutcome> {
+  if (state.on === undefined || state.on.length === 0) {
+    return {
+      kind: "failed",
+      message: `interpreter: state "${stateName}" is non-terminal but has no on: transitions`,
+    };
+  }
+
   let firstGuardError: string | undefined;
-  for (const t of transitions) {
-    if (t.when === undefined) return { transition: t };
+
+  for (const t of state.on) {
+    if (t.when === undefined) return { kind: "advance", target: t.target };
+
     let matched: unknown;
     try {
-      matched = await evalJsonLogic(t.when as JsonLogicRule, workflowCtx);
+      matched = await evalJsonLogic(t.when as JsonLogicRule, wCtx);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(
-        `jig: when: guard error (skipping transition to "${t.target}"): ${msg}\n`,
-      );
-      if (firstGuardError === undefined) {
-        firstGuardError = `guard for transition to "${t.target}" threw: ${msg}`;
-      }
+      process.stderr.write(`jig: when: guard error (skipping transition to "${t.target}"): ${msg}\n`);
+      firstGuardError ??= `guard for transition to "${t.target}" threw: ${msg}`;
       continue;
     }
-    if (matched) return { transition: t };
+
+    if (matched) return { kind: "advance", target: t.target };
   }
-  return { guardError: firstGuardError };
+
+  const reason = firstGuardError
+    ? `guard error in state "${stateName}": ${firstGuardError}`
+    : `no transition matched in state "${stateName}" — workflow stalled`;
+  return { kind: "failed", message: `interpreter: ${reason}` };
 }
 
-/**
- * Build the SDK-shaped requestedSchema from a validated ElicitationSpec.
- * Each field gets a `title` defaulting to the capitalized field name.
- */
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+function emitStatus(
+  store: InterpreterTaskStore,
+  taskId: string,
+  state: StateSpec,
+): void {
+  void store
+    .updateTaskStatus(taskId, state.mcpStatus, state.statusMessage)
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`jig: status update failed for task ${taskId}: ${msg}\n`);
+    });
+}
+
 function buildRequestedSchema(
   spec: ElicitationSpec,
 ): ElicitParams["requestedSchema"] {
@@ -708,17 +720,14 @@ function buildRequestedSchema(
     prop.title = field.title ?? name.charAt(0).toUpperCase() + name.slice(1);
     if (field.description !== undefined) prop.description = field.description;
     if (field.default !== undefined) prop.default = field.default;
-    // string-specific
     if (field.enum !== undefined) prop.enum = field.enum;
     if (field.enumNames !== undefined) prop.enumNames = field.enumNames;
     if (field.oneOf !== undefined) prop.oneOf = field.oneOf;
     if (field.format !== undefined) prop.format = field.format;
     if (field.minLength !== undefined) prop.minLength = field.minLength;
     if (field.maxLength !== undefined) prop.maxLength = field.maxLength;
-    // number/integer-specific
     if (field.minimum !== undefined) prop.minimum = field.minimum;
     if (field.maximum !== undefined) prop.maximum = field.maximum;
-    // array-specific
     if (field.items !== undefined) prop.items = field.items;
     if (field.minItems !== undefined) prop.minItems = field.minItems;
     if (field.maxItems !== undefined) prop.maxItems = field.maxItems;
@@ -742,7 +751,7 @@ function parseActionResult(result: ToolCallResult): unknown {
   }
 }
 
-async function safeFail(
+async function fail(
   store: InterpreterTaskStore,
   taskId: string,
   message: string,
