@@ -9889,9 +9889,9 @@ function validateWatcher(v, resourceIndex) {
   }
   const w = v;
   const type = w["type"];
-  if (type !== "polling" && type !== "file") {
+  if (type !== "polling" && type !== "file" && type !== "webhook") {
     throw new Error(
-      `config: resources[${resourceIndex}].watcher.type must be one of polling, file`
+      `config: resources[${resourceIndex}].watcher.type must be one of polling, file, webhook`
     );
   }
   if (type === "polling") {
@@ -9911,22 +9911,40 @@ function validateWatcher(v, resourceIndex) {
     if (cd !== void 0 && cd !== "hash" && cd !== "always") {
       throw new Error(`config: resources[${resourceIndex}].watcher.change_detection must be "hash" or "always"`);
     }
-    const out = { type: "polling", interval_ms: interval };
-    if (cd !== void 0) out.change_detection = cd;
-    return out;
+    const out2 = { type: "polling", interval_ms: interval };
+    if (cd !== void 0) out2.change_detection = cd;
+    return out2;
+  }
+  if (type === "file") {
+    for (const key of Object.keys(w)) {
+      if (!FILE_KNOWN.has(key)) {
+        throw new Error(`config: resources[${resourceIndex}].watcher file watcher: unknown key "${key}"`);
+      }
+    }
+    const path = w["path"];
+    if (typeof path !== "string" || path.length === 0) {
+      throw new Error(`config: resources[${resourceIndex}].watcher file watcher requires path (non-empty string)`);
+    }
+    return { type: "file", path };
   }
   for (const key of Object.keys(w)) {
-    if (!FILE_KNOWN.has(key)) {
-      throw new Error(`config: resources[${resourceIndex}].watcher file watcher: unknown key "${key}"`);
+    if (!WEBHOOK_KNOWN.has(key)) {
+      throw new Error(`config: resources[${resourceIndex}].watcher webhook watcher: unknown key "${key}"`);
     }
   }
-  const path = w["path"];
-  if (typeof path !== "string" || path.length === 0) {
-    throw new Error(`config: resources[${resourceIndex}].watcher file watcher requires path (non-empty string)`);
+  const port = w["port"];
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`config: resources[${resourceIndex}].watcher webhook watcher requires port (integer 1-65535)`);
   }
-  return { type: "file", path };
+  const webhookPath = w["path"];
+  if (webhookPath !== void 0 && (typeof webhookPath !== "string" || webhookPath.length === 0)) {
+    throw new Error(`config: resources[${resourceIndex}].watcher webhook watcher: path must be a non-empty string`);
+  }
+  const out = { type: "webhook", port };
+  if (typeof webhookPath === "string") out.path = webhookPath;
+  return out;
 }
-var ENTRY_KNOWN, POLLING_KNOWN, FILE_KNOWN;
+var ENTRY_KNOWN, POLLING_KNOWN, FILE_KNOWN, WEBHOOK_KNOWN;
 var init_resources = __esm({
   "src/runtime/resources.ts"() {
     "use strict";
@@ -9943,6 +9961,7 @@ var init_resources = __esm({
     ]);
     POLLING_KNOWN = /* @__PURE__ */ new Set(["type", "interval_ms", "change_detection"]);
     FILE_KNOWN = /* @__PURE__ */ new Set(["type", "path"]);
+    WEBHOOK_KNOWN = /* @__PURE__ */ new Set(["type", "port", "path"]);
   }
 });
 
@@ -10768,27 +10787,41 @@ function validateHandler(v, toolName) {
     throw new Error(`config: tools[${toolName}].handler must be a mapping`);
   }
   const h = v;
-  if (h["inline"] && typeof h["inline"] === "object") {
-    const inline = h["inline"];
-    if (typeof inline["text"] !== "string") {
-      throw new Error(
-        `config: tools[${toolName}].handler.inline.text must be a string`
-      );
-    }
-    return { inline: { text: inline["text"] } };
+  const present = HANDLER_TYPES.filter((k) => h[k] !== void 0);
+  if (present.length === 0) {
+    throw new Error(
+      `config: tools[${toolName}].handler has no supported handler type (${HANDLER_TYPES.join(", ")})`
+    );
   }
-  if (typeof h["exec"] === "string" || Array.isArray(h["exec"])) {
-    let exec;
-    if (typeof h["exec"] === "string") {
-      if (h["exec"].length === 0) {
+  if (present.length > 1) {
+    throw new Error(
+      `config: tools[${toolName}].handler has multiple handler types (${present.join(", ")}); exactly one is required`
+    );
+  }
+  const kind = present[0];
+  switch (kind) {
+    case "inline": {
+      const inline = h["inline"];
+      if (!inline || typeof inline !== "object") {
         throw new Error(
-          `config: tools[${toolName}].handler.exec must be a non-empty string`
+          `config: tools[${toolName}].handler.inline must be a mapping`
         );
       }
-      exec = h["exec"];
-    } else {
+      if (typeof inline["text"] !== "string") {
+        throw new Error(
+          `config: tools[${toolName}].handler.inline.text must be a string`
+        );
+      }
+      return { inline: { text: inline["text"] } };
+    }
+    case "exec": {
+      if (typeof h["exec"] === "string") {
+        throw new Error(
+          `config: tools[${toolName}].handler.exec must be an array of strings, not a string`
+        );
+      }
       const arr = h["exec"];
-      if (arr.length === 0) {
+      if (!Array.isArray(arr) || arr.length === 0) {
         throw new Error(
           `config: tools[${toolName}].handler.exec array must not be empty`
         );
@@ -10800,37 +10833,28 @@ function validateHandler(v, toolName) {
           );
         }
       }
-      exec = arr;
-    }
-    const result = { exec };
-    if (h["max_output_bytes"] !== void 0) {
-      if (typeof h["max_output_bytes"] !== "number" || !Number.isFinite(h["max_output_bytes"]) || h["max_output_bytes"] <= 0) {
-        throw new Error(
-          `config: tools[${toolName}].handler.max_output_bytes must be a positive number`
-        );
+      const result = { exec: arr };
+      if (h["max_output_bytes"] !== void 0) {
+        if (typeof h["max_output_bytes"] !== "number" || !Number.isFinite(h["max_output_bytes"]) || h["max_output_bytes"] <= 0) {
+          throw new Error(
+            `config: tools[${toolName}].handler.max_output_bytes must be a positive number`
+          );
+        }
+        result.max_output_bytes = h["max_output_bytes"];
       }
-      result.max_output_bytes = h["max_output_bytes"];
+      return result;
     }
-    return result;
+    case "dispatch":
+      return validateDispatch(h["dispatch"], toolName);
+    case "compute":
+      return { compute: h["compute"] };
+    case "http":
+      return validateHttp(h["http"], toolName);
+    case "graphql":
+      return validateGraphql(h["graphql"], toolName);
+    case "workflow":
+      return validateWorkflowHandler(h["workflow"], toolName);
   }
-  if (h["dispatch"] && typeof h["dispatch"] === "object") {
-    return validateDispatch(h["dispatch"], toolName);
-  }
-  if ("compute" in h) {
-    return { compute: h["compute"] };
-  }
-  if (h["http"] && typeof h["http"] === "object") {
-    return validateHttp(h["http"], toolName);
-  }
-  if (h["graphql"] && typeof h["graphql"] === "object") {
-    return validateGraphql(h["graphql"], toolName);
-  }
-  if (h["workflow"] && typeof h["workflow"] === "object") {
-    return validateWorkflowHandler(h["workflow"], toolName);
-  }
-  throw new Error(
-    `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http, graphql, workflow)`
-  );
 }
 function validateHandlerPublic(h, ownerLabel) {
   return validateHandler(h, ownerLabel);
@@ -11094,7 +11118,7 @@ function validateWorkflowHandler(v, toolName) {
   }
   return out;
 }
-var import_yaml, KNOWN_ROOT_KEYS, CURRENT_VERSION, VALID_INPUT_TYPES, TOOL_KNOWN_KEYS;
+var import_yaml, KNOWN_ROOT_KEYS, CURRENT_VERSION, VALID_INPUT_TYPES, TOOL_KNOWN_KEYS, HANDLER_TYPES;
 var init_config = __esm({
   "src/runtime/config.ts"() {
     "use strict";
@@ -11133,6 +11157,7 @@ var init_config = __esm({
       "transform",
       "execution"
     ]);
+    HANDLER_TYPES = ["inline", "exec", "dispatch", "compute", "http", "graphql", "workflow"];
   }
 });
 
@@ -11230,7 +11255,7 @@ async function run2(argv) {
     options: {
       help: { type: "boolean", short: "h" },
       port: { type: "string" },
-      watch: { type: "boolean", default: true }
+      watch: { type: "boolean", default: true, negatable: true }
     }
   });
   if (values.help) {
@@ -11374,6 +11399,14 @@ async function run3(argv) {
     }
     yamlContent = readFileSync2(configPath, "utf8");
   }
+  const portValue = values.port !== void 0 ? Number(values.port) : null;
+  if (values.port !== void 0) {
+    if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) {
+      process.stderr.write(`jig build: invalid port "${values.port}"
+`);
+      process.exit(1);
+    }
+  }
   const embeddedConfigPlugin = {
     name: "jig-embedded-config",
     setup(b) {
@@ -11384,7 +11417,10 @@ async function run3(argv) {
       b.onLoad(
         { filter: /.*/, namespace: "jig-embedded" },
         () => ({
-          contents: `export const embeddedYaml = ${yamlContent !== null ? JSON.stringify(yamlContent) : "null"};`,
+          contents: [
+            `export const embeddedYaml = ${yamlContent !== null ? JSON.stringify(yamlContent) : "null"};`,
+            `export const embeddedPort = ${portValue !== null ? String(portValue) : "null"};`
+          ].join("\n"),
           loader: "ts"
         })
       );
@@ -11561,28 +11597,27 @@ Options:
   -V, --version                Show version
 
 Run 'jig <command> --help' for command-specific help.`;
+var flagArgs = process.argv.slice(2);
+if (flagArgs.includes("-V") || flagArgs.includes("--version")) {
+  let version;
+  if (true) {
+    version = "1.0.0-alpha.0";
+  } else {
+    const { createRequire } = await null;
+    const req = createRequire(import.meta.url);
+    version = req("../../package.json").version;
+  }
+  process.stdout.write(version + "\n");
+  process.exit(0);
+}
 var { positionals } = parseArgs5({
   allowPositionals: true,
   strict: false,
-  args: process.argv.slice(2)
+  args: flagArgs
 });
 var command = positionals[0];
 if (!command || command === "help") {
   process.stdout.write(USAGE5 + "\n");
-  process.exit(0);
-}
-var flagArgs = process.argv.slice(2);
-if (flagArgs.includes("-h") || flagArgs.includes("--help")) {
-  if (!command || command === "help") {
-    process.stdout.write(USAGE5 + "\n");
-    process.exit(0);
-  }
-}
-if (flagArgs.includes("-V") || flagArgs.includes("--version")) {
-  const { createRequire } = await import("node:module");
-  const require2 = createRequire(import.meta.url);
-  const pkg = require2("../../package.json");
-  process.stdout.write(pkg.version + "\n");
   process.exit(0);
 }
 switch (command) {

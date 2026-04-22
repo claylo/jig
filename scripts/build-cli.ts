@@ -1,11 +1,13 @@
 import { build } from "esbuild";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chmodSync, copyFileSync } from "node:fs";
+import { chmodSync, copyFileSync, readFileSync } from "node:fs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const entry = join(root, "src", "cli", "index.ts");
 const outfile = join(root, "bin", "jig.mjs");
+
+const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
 
 const result = await build({
   entryPoints: [entry],
@@ -14,6 +16,9 @@ const result = await build({
   platform: "node",
   target: "node24",
   outfile,
+  define: {
+    __JIG_VERSION__: JSON.stringify(pkg.version),
+  },
   banner: {
     js: [
       "#!/usr/bin/env node",
