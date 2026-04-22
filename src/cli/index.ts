@@ -18,11 +18,18 @@ Run 'jig <command> --help' for command-specific help.`;
 
 const flagArgs = process.argv.slice(2);
 
+declare const __JIG_VERSION__: string | undefined;
+
 if (flagArgs.includes("-V") || flagArgs.includes("--version")) {
-  const { createRequire } = await import("node:module");
-  const require = createRequire(import.meta.url);
-  const pkg = require("../../package.json") as { version: string };
-  process.stdout.write(pkg.version + "\n");
+  let version: string;
+  if (typeof __JIG_VERSION__ !== "undefined") {
+    version = __JIG_VERSION__;
+  } else {
+    const { createRequire } = await import("node:module");
+    const req = createRequire(import.meta.url);
+    version = (req("../../package.json") as { version: string }).version;
+  }
+  process.stdout.write(version + "\n");
   process.exit(0);
 }
 
