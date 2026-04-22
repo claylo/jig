@@ -3,7 +3,7 @@ import { errorResult, type ToolCallResult, type InvokeContext } from "./types.ts
 import type { CompiledConnection } from "../connections.ts";
 import { resolveHeaders } from "../connections.ts";
 import { performFetch } from "../util/fetch.ts";
-import { render, renderJsonLeaves } from "../util/template.ts";
+import { render, renderUriEncoded, renderJsonLeaves } from "../util/template.ts";
 
 /**
  * Invoke an http handler. Composition order:
@@ -45,7 +45,8 @@ export async function invokeHttp(
   }
 
   // Step 2 — render path + query + header values
-  const pathRendered = spec.path !== undefined ? render(spec.path, renderCtx) : "";
+  // Path uses URI-encoded interpolation to prevent traversal via ../
+  const pathRendered = spec.path !== undefined ? renderUriEncoded(spec.path, renderCtx) : "";
   let fullUrl = baseUrl + pathRendered;
   if (spec.query !== undefined) {
     const params = new URLSearchParams();

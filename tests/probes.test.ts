@@ -40,7 +40,7 @@ probes:
       method: GET
       path: /status
   git_sha:
-    exec: "git rev-parse HEAD"
+    exec: ["git", "rev-parse", "HEAD"]
 tools:
   - name: t1
     description: x
@@ -48,7 +48,7 @@ tools:
 `;
   const cfg = parseConfig(yamlText);
   assert.ok(cfg.probes!["status"]?.handler);
-  assert.equal((cfg.probes!["git_sha"]?.handler as { exec: string }).exec, "git rev-parse HEAD");
+  assert.deepEqual((cfg.probes!["git_sha"]?.handler as { exec: string[] }).exec, ["git", "rev-parse", "HEAD"]);
 });
 
 test("config rejects a probe with no handler", () => {
@@ -71,7 +71,7 @@ connections: { api: { url: https://example.com } }
 probes:
   conflicted:
     http: { connection: api, method: GET }
-    exec: "echo hi"
+    exec: ["/bin/echo", "hi"]
 tools: []
 `;
   assert.throws(() => parseConfig(yamlText), /got http, exec/);
@@ -83,7 +83,7 @@ version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   weird:
-    exec: "echo hi"
+    exec: ["/bin/echo", "hi"]
     bogus: 42
 tools: []
 `;
@@ -96,7 +96,7 @@ version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   "bad.name":
-    exec: "echo hi"
+    exec: ["/bin/echo", "hi"]
 tools: []
 `;
   assert.throws(() => parseConfig(yamlText), /probe names must match/);
@@ -108,7 +108,7 @@ version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   slow:
-    exec: "echo hi"
+    exec: ["/bin/echo", "hi"]
     timeout_ms: -1
 tools: []
 `;
@@ -121,7 +121,7 @@ version: "1"
 server: { name: t, version: "0.0.1" }
 probes:
   shaped:
-    exec: "echo hi"
+    exec: ["/bin/echo", "hi"]
     map:
       var: "result"
 tools: []
@@ -242,7 +242,7 @@ test("resolveProbes resolves an exec probe to its stdout", async () => {
   resetAccessForTests();
   configureAccess({}, process.cwd());
   const result = await resolveProbes(
-    { greeting: { handler: { exec: "echo hello" } } },
+    { greeting: { handler: { exec: ["/bin/echo", "hello"] } } },
     {},
   );
   assert.match(String(result["greeting"]), /hello/);
@@ -280,7 +280,7 @@ test("resolveProbes returns raw text when map: is absent", async () => {
   // No map: — the resolver early-returns the handler's raw text without
   // attempting JSON.parse.
   const result = await resolveProbes(
-    { plain: { handler: { exec: "echo plain text here" } } },
+    { plain: { handler: { exec: ["/bin/echo", "plain", "text", "here"] } } },
     {},
   );
   assert.match(String(result["plain"]), /plain text here/);
@@ -295,7 +295,7 @@ test("resolveProbes passes raw string to map: when response is not JSON", async 
   const result = await resolveProbes(
     {
       plain_mapped: {
-        handler: { exec: "echo not json here" },
+        handler: { exec: ["/bin/echo", "not", "json", "here"] },
         map: { var: "result" },
       },
     },
@@ -351,7 +351,7 @@ import { configureAccess, resetAccessForTests } from "${process.cwd()}/src/runti
 resetAccessForTests();
 configureAccess({}, process.cwd());
 await resolveProbes(
-  { slow: { handler: { exec: "sleep 5" }, timeout_ms: 50 } },
+  { slow: { handler: { exec: ["sleep", "5"] }, timeout_ms: 50 } },
   {},
 );
 console.log("UNREACHABLE");
@@ -375,7 +375,7 @@ import { configureAccess, resetAccessForTests } from "${process.cwd()}/src/runti
 resetAccessForTests();
 configureAccess({}, process.cwd());
 await resolveProbes(
-  { broken: { handler: { exec: "this-command-does-not-exist-xyz" } } },
+  { broken: { handler: { exec: ["this-command-does-not-exist-xyz"] } } },
   {},
 );
 console.log("UNREACHABLE");
@@ -399,8 +399,8 @@ resetAccessForTests();
 configureAccess({}, process.cwd());
 await resolveProbes(
   {
-    a: { handler: { exec: "this-command-does-not-exist-aaa" } },
-    b: { handler: { exec: "this-command-does-not-exist-bbb" } },
+    a: { handler: { exec: ["this-command-does-not-exist-aaa"] } },
+    b: { handler: { exec: ["this-command-does-not-exist-bbb"] } },
   },
   {},
 );
@@ -427,7 +427,7 @@ configureAccess({}, process.cwd());
 await resolveProbes(
   {
     bad_map: {
-      handler: { exec: "echo hi" },
+      handler: { exec: ["/bin/echo", "hi"] },
       map: { "/": [{ var: "result" }, 0] },
     },
   },

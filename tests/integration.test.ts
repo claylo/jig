@@ -134,7 +134,7 @@ tools:
           say:
             requires: [message]
             handler:
-              exec: "/bin/echo {{message}}"
+              exec: ["/bin/echo", "{{message}}"]
           silent:
             handler:
               inline: { text: "" }
@@ -359,7 +359,7 @@ server:
   version: "0.0.1"
 probes:
   marker:
-    exec: "echo plan5-marker-value"
+    exec: ["/bin/echo", "plan5-marker-value"]
 tools:
   - name: t1
     description: "Marker is {{probe.marker}}"
@@ -488,7 +488,7 @@ resources:
   - uri: config://jig/broken
     name: Broken
     handler:
-      exec: "sh -c 'echo oops >&2; exit 2'"
+      exec: ["sh", "-c", "echo oops >&2; exit 2"]
 tools: []
 `);
   try {
@@ -525,7 +525,7 @@ resources:
   - uri: config://jig/state
     name: State
     handler:
-      exec: "cat ${statePath}"
+      exec: ["cat", "${statePath}"]
     watcher:
       type: polling
       interval_ms: 200
@@ -599,7 +599,7 @@ resources:
   - uri: config://jig/state
     name: State
     handler:
-      exec: "cat ${statePath}"
+      exec: ["cat", "${statePath}"]
     watcher:
       type: file
       path: ${statePath}
@@ -693,7 +693,7 @@ resources:
   - uri: config://jig/state
     name: State
     handler:
-      exec: "cat ${statePath}"
+      exec: ["cat", "${statePath}"]
     watcher:
       type: polling
       interval_ms: 150
@@ -761,7 +761,7 @@ resources:
   - uri: config://jig/state
     name: State
     handler:
-      exec: "cat ${statePath}"
+      exec: ["cat", "${statePath}"]
     watcher:
       type: polling
       interval_ms: 150
@@ -1104,7 +1104,7 @@ tools:
   - name: where
     description: x
     handler:
-      exec: "echo region={{probe.region_envelope}}"
+      exec: ["/bin/echo", "region={{probe.region_envelope}}"]
 `,
     );
     try {
@@ -1191,7 +1191,7 @@ resources:
     name: Jobs by status
     mimeType: text/plain
     handler:
-      exec: "echo jobs with status={{status}}"
+      exec: ["/bin/echo", "jobs", "with", "status={{status}}"]
 tools: []
 `);
   try {
@@ -1383,7 +1383,7 @@ resources:
     name: Jobs by status
     mimeType: application/json
     handler:
-      exec: "echo jobs-status={{status}}"
+      exec: ["/bin/echo", "jobs-status={{status}}"]
 prompts:
   - name: greet
     arguments:

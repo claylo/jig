@@ -817,7 +817,7 @@ test("interpreter fails the task when an action returns isError: true", async ()
         states: {
           boom: {
             mcpStatus: "working",
-            actions: [{ exec: "false" }], // exits non-zero, becomes isError
+            actions: [{ exec: ["false"] }], // exits non-zero, becomes isError
             on: [{ target: "done" }],
           },
           done: { mcpStatus: "completed", result: { text: "should not reach" } },

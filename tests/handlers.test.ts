@@ -31,15 +31,15 @@ async function startHandlerFixture(
 const emptyCtx: InvokeContext = { connections: {}, probe: {} };
 
 test("invokeExec returns stdout from /bin/echo as text content", async () => {
-  const result = await invokeExec({ exec: "/bin/echo hello" }, {}, emptyCtx);
+  const result = await invokeExec({ exec: ["/bin/echo", "hello"] }, {}, emptyCtx);
   assert.equal(result.isError, undefined);
   assert.equal(result.content[0]!.type, "text");
   assert.equal(result.content[0]!.text, "hello\n");
 });
 
-test("invokeExec renders Mustache tokens from args before splitting", async () => {
+test("invokeExec renders Mustache tokens per element", async () => {
   const result = await invokeExec(
-    { exec: "/bin/echo {{name}}" },
+    { exec: ["/bin/echo", "{{name}}"] },
     { name: "Alice" },
     emptyCtx,
   );
@@ -48,7 +48,7 @@ test("invokeExec renders Mustache tokens from args before splitting", async () =
 
 test("invokeExec flags non-zero exit as isError with stderr", async () => {
   const result = await invokeExec(
-    { exec: "node tests/fixtures/exit-nonzero.mjs" },
+    { exec: ["node", "tests/fixtures/exit-nonzero.mjs"] },
     {},
     emptyCtx,
   );
@@ -57,18 +57,12 @@ test("invokeExec flags non-zero exit as isError with stderr", async () => {
 
 test("invokeExec flags missing executable as isError", async () => {
   const result = await invokeExec(
-    { exec: "/does/not/exist" },
+    { exec: ["/does/not/exist"] },
     {},
     emptyCtx,
   );
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /ENOENT|not found|no such file/i);
-});
-
-test("invokeExec rejects empty command after render as isError", async () => {
-  const result = await invokeExec({ exec: "{{missing}}" }, {}, emptyCtx);
-  assert.equal(result.isError, true);
-  assert.match(result.content[0]!.text, /empty|no command/i);
 });
 
 test("invokeExec array form: each element becomes one argv entry", async () => {
@@ -764,7 +758,7 @@ test("invokeGraphql respects connection Content-Type regardless of casing", asyn
 test("probe context flows into exec handler render", async () => {
   const ctx: InvokeContext = { connections: {}, probe: { greeting: "world" } };
   const result = await invokeExec(
-    { exec: "echo {{probe.greeting}}" },
+    { exec: ["/bin/echo", "{{probe.greeting}}"] },
     {},
     ctx,
   );

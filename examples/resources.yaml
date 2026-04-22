@@ -7,13 +7,13 @@
 # Run with `just smoke-resource`. Hermetic — no network; the polling
 # resource reads a fixed tmp path that the smoke harness writes.
 #
-# NOTE: the polling watcher re-invokes `exec: "cat ..."` every 500ms.
+# NOTE: the polling watcher re-invokes the exec handler every 500ms.
 # Authors declaring polling resources against rate-limited upstreams
 # (GitHub API, Linear GraphQL) will hit rate limits — plan intervals
 # accordingly.
 #
 # NOTE: jig's exec handler uses execFile, not sh -c — ${VAR} shell
-# expansion doesn't apply inside the command string. Hard-code paths,
+# expansion doesn't apply inside the argv array. Hard-code paths,
 # or pass them via a probe (which resolves at boot).
 
 version: "1"
@@ -45,7 +45,7 @@ resources:
     description: Polling-watched content. Smoke harness writes the file before the run.
     mimeType: text/plain
     handler:
-      exec: "cat /tmp/jig-plan6-state.txt"
+      exec: ["cat", "/tmp/jig-plan6-state.txt"]
     watcher:
       type: polling
       interval_ms: 500
