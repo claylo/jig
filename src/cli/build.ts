@@ -85,6 +85,14 @@ export async function run(argv: string[]): Promise<void> {
     yamlContent = readFileSync(configPath, "utf8");
   }
 
+  const portValue = values.port !== undefined ? Number(values.port) : null;
+  if (values.port !== undefined) {
+    if (!Number.isInteger(portValue) || portValue! < 1 || portValue! > 65535) {
+      process.stderr.write(`jig build: invalid port "${values.port}"\n`);
+      process.exit(1);
+    }
+  }
+
   const embeddedConfigPlugin = {
     name: "jig-embedded-config",
     setup(b: import("esbuild").PluginBuild) {
@@ -95,7 +103,10 @@ export async function run(argv: string[]): Promise<void> {
       b.onLoad(
         { filter: /.*/, namespace: "jig-embedded" },
         () => ({
-          contents: `export const embeddedYaml = ${yamlContent !== null ? JSON.stringify(yamlContent) : "null"};`,
+          contents: [
+            `export const embeddedYaml = ${yamlContent !== null ? JSON.stringify(yamlContent) : "null"};`,
+            `export const embeddedPort = ${portValue !== null ? String(portValue) : "null"};`,
+          ].join("\n"),
           loader: "ts" as const,
         }),
       );

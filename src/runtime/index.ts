@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigFromFile, parseConfig, resolveConfigPath } from "./config.ts";
-import { embeddedYaml } from "./embedded-config.ts";
+import { embeddedYaml, embeddedPort } from "./embedded-config.ts";
 import { createServer, type CallToolResult, type JigTaskHandler, type ToolHandler } from "./server.ts";
 import { registerResources, startWatchers } from "./resources.ts";
 import { registerPrompts } from "./prompts.ts";
@@ -266,7 +266,7 @@ async function main(): Promise<void> {
     server.wireCompletions(config.completions);
   }
 
-  const portArg = parsePortArg(process.argv.slice(2));
+  const portArg = parsePortArg(process.argv.slice(2)) ?? embeddedPort ?? undefined;
   if (portArg !== undefined) {
     const http = createHttpTransport({ port: portArg });
     await server.connect(http.transport);
