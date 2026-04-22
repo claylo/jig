@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { watch as fsWatch } from "node:fs";
+import { createServer as createHttpServer, type Server } from "node:http";
 import type { ResourceSpec, ResourcesConfig, WatcherSpec, Handler } from "./config.ts";
 import type { JigServerHandle, RegisteredResourceHandle, SubscriptionTracker } from "./server.ts";
 import { invoke, type InvokeContext } from "./handlers/index.ts";
@@ -129,6 +130,7 @@ function validateResourceEntry(
 
 const POLLING_KNOWN = new Set(["type", "interval_ms", "change_detection"]);
 const FILE_KNOWN = new Set(["type", "path"]);
+const WEBHOOK_KNOWN = new Set(["type", "port", "path"]);
 
 function validateWatcher(v: unknown, resourceIndex: number): WatcherSpec {
   if (!v || typeof v !== "object" || Array.isArray(v)) {
@@ -136,9 +138,9 @@ function validateWatcher(v: unknown, resourceIndex: number): WatcherSpec {
   }
   const w = v as Record<string, unknown>;
   const type = w["type"];
-  if (type !== "polling" && type !== "file") {
+  if (type !== "polling" && type !== "file" && type !== "webhook") {
     throw new Error(
-      `config: resources[${resourceIndex}].watcher.type must be one of polling, file`,
+      `config: resources[${resourceIndex}].watcher.type must be one of polling, file, webhook`,
     );
   }
 
@@ -164,17 +166,36 @@ function validateWatcher(v: unknown, resourceIndex: number): WatcherSpec {
     return out;
   }
 
-  // type === "file"
+  if (type === "file") {
+    for (const key of Object.keys(w)) {
+      if (!FILE_KNOWN.has(key)) {
+        throw new Error(`config: resources[${resourceIndex}].watcher file watcher: unknown key "${key}"`);
+      }
+    }
+    const path = w["path"];
+    if (typeof path !== "string" || path.length === 0) {
+      throw new Error(`config: resources[${resourceIndex}].watcher file watcher requires path (non-empty string)`);
+    }
+    return { type: "file", path };
+  }
+
+  // type === "webhook"
   for (const key of Object.keys(w)) {
-    if (!FILE_KNOWN.has(key)) {
-      throw new Error(`config: resources[${resourceIndex}].watcher file watcher: unknown key "${key}"`);
+    if (!WEBHOOK_KNOWN.has(key)) {
+      throw new Error(`config: resources[${resourceIndex}].watcher webhook watcher: unknown key "${key}"`);
     }
   }
-  const path = w["path"];
-  if (typeof path !== "string" || path.length === 0) {
-    throw new Error(`config: resources[${resourceIndex}].watcher file watcher requires path (non-empty string)`);
+  const port = w["port"];
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`config: resources[${resourceIndex}].watcher webhook watcher requires port (integer 1-65535)`);
   }
-  return { type: "file", path };
+  const webhookPath = w["path"];
+  if (webhookPath !== undefined && (typeof webhookPath !== "string" || webhookPath.length === 0)) {
+    throw new Error(`config: resources[${resourceIndex}].watcher webhook watcher: path must be a non-empty string`);
+  }
+  const out: WatcherSpec = { type: "webhook", port };
+  if (typeof webhookPath === "string") out.path = webhookPath;
+  return out;
 }
 
 /**
@@ -293,6 +314,8 @@ export function startWatchers(
       disposers.push(startPollingWatcher(spec, spec.watcher, server, tracker, ctx));
     } else if (spec.watcher.type === "file") {
       disposers.push(startFileWatcher(spec, spec.watcher, server, tracker));
+    } else if (spec.watcher.type === "webhook") {
+      disposers.push(startWebhookWatcher(spec, spec.watcher, server, tracker));
     }
   }
   return disposers;
@@ -406,5 +429,57 @@ function startFileWatcher(
     } catch {
       // watcher close errors are fine to swallow on shutdown
     }
+  };
+}
+
+function startWebhookWatcher(
+  resource: ResourceSpecStatic,
+  watcher: Extract<WatcherSpec, { type: "webhook" }>,
+  server: JigServerHandle,
+  tracker: SubscriptionTracker,
+): WatcherDisposer {
+  const webhookPath = watcher.path ?? "/webhook";
+  let httpServer: Server | undefined;
+
+  try {
+    httpServer = createHttpServer((req, res) => {
+      if (req.method !== "POST" || req.url !== webhookPath) {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not Found");
+        return;
+      }
+
+      if (tracker.isSubscribed(resource.uri)) {
+        void server.sendResourceUpdated(resource.uri).catch((err) => {
+          process.stderr.write(
+            `jig: webhook emit for "${resource.uri}" failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        });
+      }
+
+      res.writeHead(204);
+      res.end();
+    });
+
+    httpServer.listen(watcher.port, "127.0.0.1", () => {
+      process.stderr.write(
+        `jig: webhook watcher for "${resource.uri}" listening on http://127.0.0.1:${watcher.port}${webhookPath}\n`,
+      );
+    });
+
+    httpServer.on("error", (err) => {
+      process.stderr.write(
+        `jig: webhook watcher for "${resource.uri}" error: ${err.message}\n`,
+      );
+    });
+  } catch (err) {
+    process.stderr.write(
+      `jig: failed to start webhook watcher for "${resource.uri}": ${err instanceof Error ? err.message : String(err)}\n\n`,
+    );
+    process.exit(1);
+  }
+
+  return () => {
+    httpServer?.close();
   };
 }

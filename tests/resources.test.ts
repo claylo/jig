@@ -195,11 +195,44 @@ resources:
     name: X
     handler: { inline: { text: x } }
     watcher:
-      type: webhook
-      url: https://example.com
+      type: kafka
+      topic: events
 tools: []
 `;
-  assert.throws(() => parseConfig(yamlText), /watcher\.type must be one of polling, file/);
+  assert.throws(() => parseConfig(yamlText), /watcher\.type must be one of polling, file, webhook/);
+});
+
+test("config accepts a webhook watcher", () => {
+  const yamlText = `
+version: "1"
+server: { name: t, version: "0.0.1" }
+resources:
+  - uri: config://x
+    name: X
+    handler: { inline: { text: x } }
+    watcher:
+      type: webhook
+      port: 9090
+tools: []
+`;
+  const cfg = parseConfig(yamlText);
+  const watcher = (cfg.resources![0] as { watcher?: { type: string } }).watcher;
+  assert.equal(watcher?.type, "webhook");
+});
+
+test("config rejects a webhook watcher without port", () => {
+  const yamlText = `
+version: "1"
+server: { name: t, version: "0.0.1" }
+resources:
+  - uri: config://x
+    name: X
+    handler: { inline: { text: x } }
+    watcher:
+      type: webhook
+tools: []
+`;
+  assert.throws(() => parseConfig(yamlText), /webhook watcher requires port/);
 });
 
 test("config rejects a watcher with an unknown key for its type", () => {

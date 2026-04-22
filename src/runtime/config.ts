@@ -115,12 +115,6 @@ export interface ProbeSpec {
 
 export type ProbesConfig = Record<string, ProbeSpec>;
 
-/**
- * Watcher types supported in v1. Polling re-invokes the handler on an
- * interval and compares content hashes; file uses fs.watch on a single
- * filesystem path. Webhook and glob paths are deferred — see Plan 6
- * design doc, "Out of scope".
- */
 export type WatcherSpec =
   | {
       type: "polling";
@@ -130,6 +124,11 @@ export type WatcherSpec =
   | {
       type: "file";
       path: string;
+    }
+  | {
+      type: "webhook";
+      port: number;
+      path?: string;
     };
 
 /**

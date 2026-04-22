@@ -14,7 +14,7 @@ import { resolveDispatchCase } from "./handlers/dispatch.ts";
 import { evaluate } from "./util/jsonlogic.ts";
 import { configureAccess, isHostAllowed } from "./util/access.ts";
 import { applyTransform } from "./util/transform.ts";
-import { compileConnections } from "./connections.ts";
+import { compileConnections, resolveHeaders } from "./connections.ts";
 import { resolveProbes } from "./probes.ts";
 // jsonlogic.ts helpers register at module load time; the evaluate import
 // above triggers it.
@@ -53,6 +53,18 @@ async function main(): Promise<void> {
   }
 
   const compiled = config.connections ? compileConnections(config.connections) : {};
+
+  // Eagerly resolve all connection headers at boot so missing env vars
+  // fail now, not on the first outbound request.
+  for (const [name, conn] of Object.entries(compiled)) {
+    try {
+      await resolveHeaders(conn);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`jig: connection "${name}" header resolution failed at boot: ${msg}\n`);
+      process.exit(1);
+    }
+  }
 
   // resolveProbes calls process.exit(1) on any failure — no try/catch needed.
   // Must run AFTER configureAccess (probes may themselves hit network hosts
