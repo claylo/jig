@@ -2,12 +2,12 @@
 audit: 2026-04-21-Full repo audit — src/runtime, src/cli, examples, and tests
 last_updated: 2026-04-21
 status:
-  fixed: 10
+  fixed: 12
   mitigated: 0
   accepted: 0
   disputed: 0
   deferred: 0
-  open: 2
+  open: 0
 ---
 
 # Actions Taken: Full repo audit — src/runtime, src/cli, examples, and tests
@@ -167,3 +167,41 @@ Each owns one concern and can be changed without reading the others. Renamed
 `safeFail()` to `fail()`. Added `WorkflowCtx` interface.
 
 Same behavior, same 349 tests passing, same error messages.
+
+---
+
+## 2026-04-21 — Implement webhook watcher type
+
+**Disposition:** fixed
+**Addresses:** [webhook-watcher-type-advertised-but-rejected](README.md#webhook-watcher-type-advertised-but-rejected)
+**Commit:** pending (staged on fix/audit-docs-parity)
+**Author:** Clay Loveless + Claude
+
+Implemented the `webhook` watcher type that the README and design doc advertise.
+Added `{ type: "webhook"; port: number; path?: string }` to `WatcherSpec` in
+config.ts. The validator accepts `webhook` alongside `polling` and `file`, requires
+a `port` (integer 1-65535), and accepts an optional `path` (defaults to `/webhook`).
+
+`startWebhookWatcher()` in resources.ts starts a lightweight HTTP server on the
+configured port bound to 127.0.0.1. A POST to the webhook path fires
+`notifications/resources/updated` for the resource's URI (if subscribed) and
+returns 204. All other methods/paths return 404. The server logs its listen
+address to stderr at boot and cleans up on dispose.
+
+Added tests: config accepts webhook watcher, config rejects webhook without port.
+
+---
+
+## 2026-04-21 — Eagerly resolve connection headers at boot
+
+**Disposition:** fixed
+**Addresses:** [env-vars-are-not-resolved-at-boot](README.md#env-vars-are-not-resolved-at-boot)
+**Commit:** pending (staged on fix/audit-docs-parity)
+**Author:** Clay Loveless + Claude
+
+Added eager `resolveHeaders()` call for every compiled connection immediately
+after `compileConnections()` in `src/runtime/index.ts`. Missing env vars now
+cause a boot failure with a clear error message (`connection "X" header
+resolution failed at boot: ...`) instead of silently surviving startup and
+failing on the first outbound request. The README's claim that `${VAR}` is
+"resolved at boot" is now accurate.
