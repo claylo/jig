@@ -130,6 +130,20 @@ tools:
   assert.throws(() => parseConfig(yaml), /exec must be an array of strings, not a string/);
 });
 
+test("parseConfig rejects handler with multiple types", () => {
+  const yaml = `
+version: "1"
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: mixed
+    description: bad
+    handler:
+      exec: ["/bin/echo", "hello"]
+      inline: { text: "also here" }
+`;
+  assert.throws(() => parseConfig(yaml), /multiple handler types.*exactly one is required/);
+});
+
 test("parseConfig accepts exec handler as array of strings", () => {
   const yaml = `
 version: "1"

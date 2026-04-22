@@ -647,13 +647,12 @@ export async function interpretWorkflow(
       return;
     }
 
-    const next = await pickTransition(state.on, workflowCtx);
+    const { transition: next, guardError } = await pickTransition(state.on, workflowCtx);
     if (next === undefined) {
-      await safeFail(
-        store,
-        taskId,
-        `interpreter: no transition matched in state "${current}" — workflow stalled`,
-      );
+      const reason = guardError
+        ? `guard error in state "${current}": ${guardError}`
+        : `no transition matched in state "${current}" — workflow stalled`;
+      await safeFail(store, taskId, `interpreter: ${reason}`);
       return;
     }
     current = next.target;
@@ -666,12 +665,18 @@ export async function interpretWorkflow(
   );
 }
 
+interface TransitionResult {
+  transition?: TransitionSpec;
+  guardError?: string;
+}
+
 async function pickTransition(
   transitions: TransitionSpec[],
   workflowCtx: Record<string, unknown>,
-): Promise<TransitionSpec | undefined> {
+): Promise<TransitionResult> {
+  let firstGuardError: string | undefined;
   for (const t of transitions) {
-    if (t.when === undefined) return t;
+    if (t.when === undefined) return { transition: t };
     let matched: unknown;
     try {
       matched = await evalJsonLogic(t.when as JsonLogicRule, workflowCtx);
@@ -680,11 +685,14 @@ async function pickTransition(
       process.stderr.write(
         `jig: when: guard error (skipping transition to "${t.target}"): ${msg}\n`,
       );
+      if (firstGuardError === undefined) {
+        firstGuardError = `guard for transition to "${t.target}" threw: ${msg}`;
+      }
       continue;
     }
-    if (matched) return t;
+    if (matched) return { transition: t };
   }
-  return undefined;
+  return { guardError: firstGuardError };
 }
 
 /**
@@ -744,7 +752,10 @@ async function safeFail(
       content: [{ type: "text", text: message }],
       isError: true,
     });
-  } catch {
-    // Nothing left to do; the store is the only output channel.
+  } catch (err: unknown) {
+    const storeErr = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `jig: task ${taskId} failed ("${message}") and the store rejected the result: ${storeErr}\n`,
+    );
   }
 }
