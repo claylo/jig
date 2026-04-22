@@ -159,8 +159,6 @@ async function resolveOne(
   ctx: InvokeContext,
 ): Promise<unknown> {
   const timeoutMs = spec.timeout_ms ?? DEFAULT_TIMEOUT_MS;
-  // ProbeHandler is a structural subset of Handler; cast needed because
-  // { exec: string } in ProbeHandler doesn't alias ExecHandler by name.
   const handler = spec.handler as Handler;
   const dispatchPromise = invoke(handler, {}, ctx);
 

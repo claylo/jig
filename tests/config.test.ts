@@ -111,10 +111,23 @@ tools:
   - name: runner
     description: runs a script
     handler:
-      exec: "/bin/echo hello"
+      exec: ["/bin/echo", "hello"]
 `;
   const config = parseConfig(yaml);
-  assert.deepEqual(config.tools[0]!.handler, { exec: "/bin/echo hello" });
+  assert.deepEqual(config.tools[0]!.handler, { exec: ["/bin/echo", "hello"] });
+});
+
+test("parseConfig rejects string-form exec handler", () => {
+  const yaml = `
+version: "1"
+server: { name: e, version: "0.1.0" }
+tools:
+  - name: runner
+    description: runs a script
+    handler:
+      exec: "/bin/echo hello"
+`;
+  assert.throws(() => parseConfig(yaml), /exec must be an array of strings, not a string/);
 });
 
 test("parseConfig accepts exec handler as array of strings", () => {
@@ -165,11 +178,11 @@ tools:
   - name: echo
     description: first
     handler:
-      exec: "/bin/echo first"
+      exec: ["/bin/echo", "first"]
   - name: echo
     description: second
     handler:
-      exec: "/bin/echo second"
+      exec: ["/bin/echo", "second"]
 `;
   assert.throws(() => parseConfig(yaml), /duplicate tool name "echo"/);
 });
@@ -183,7 +196,7 @@ tools:
     description: echoes
     gaurd: true
     handler:
-      exec: "/bin/echo hello"
+      exec: ["/bin/echo", "hello"]
 `;
   assert.throws(() => parseConfig(yaml), /unknown key "gaurd"/);
 });
@@ -198,7 +211,7 @@ tools:
     input:
       msg: { type: strinng }
     handler:
-      exec: "/bin/echo {{msg}}"
+      exec: ["/bin/echo", "{{msg}}"]
 `;
   assert.throws(() => parseConfig(yaml), /type must be one of.*got "strinng"/);
 });
@@ -220,7 +233,7 @@ tools:
           get:
             requires: [id]
             handler:
-              exec: "/bin/echo {{id}}"
+              exec: ["/bin/echo", "{{id}}"]
           search:
             handler:
               inline: { text: "no results" }

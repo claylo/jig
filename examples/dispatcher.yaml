@@ -44,11 +44,11 @@ tools:
           say:
             requires: [name]
             handler:
-              exec: "/bin/echo Hello, {{name}}!"
+              exec: ["/bin/echo", "Hello, {{name}}!"]
           count:
             requires: [text]
             handler:
-              exec: "/usr/bin/awk BEGIN{print length(\"{{text}}\")}"
+              exec: ["/usr/bin/awk", "BEGIN{print length(\"{{text}}\")}" ]
           help:
             handler:
               inline:

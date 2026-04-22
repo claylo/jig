@@ -17,9 +17,9 @@ server:
 
 probes:
   git_sha:
-    exec: "git rev-parse --short HEAD"
+    exec: ["git", "rev-parse", "--short", "HEAD"]
   current_user:
-    exec: "whoami"
+    exec: ["whoami"]
 
 tools:
   - name: example
@@ -43,7 +43,7 @@ tools:
           echo:
             requires: [message]
             handler:
-              exec: "echo [{{probe.current_user}}] {{message}}"
+              exec: ["/bin/echo", "[{{probe.current_user}}] {{message}}"]
 
           help:
             handler:

@@ -39,7 +39,7 @@ resources:
       interval_ms: 5000
   - uri: file:///tmp/state.json
     name: State
-    handler: { exec: "cat /tmp/state.json" }
+    handler: { exec: ["cat", "/tmp/state.json"] }
     watcher:
       type: file
       path: /tmp/state.json

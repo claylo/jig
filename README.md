@@ -188,7 +188,7 @@ tools:
     handler:
       # Pick one:
       inline:   { text: "static response" }
-      exec:     "command {{field_name}}"
+      exec:     ["command", "{{field_name}}"]
       compute:  { var: "field_name" }       # JSONLogic expression
       http:     { connection: my_api, method: GET, path: "/endpoint" }
       graphql:  { connection: my_api, query: "{ items { id } }" }
@@ -271,7 +271,7 @@ Fetch data at startup and bake it into tool descriptions:
 ```yaml
 probes:
   git_sha:
-    exec: "git rev-parse --short HEAD"
+    exec: ["git", "rev-parse", "--short", "HEAD"]
   teams:
     graphql:
       connection: api
@@ -295,7 +295,7 @@ resources:
     description: Current pending job count
     mimeType: application/json
     handler:
-      exec: "./scripts/count-pending"
+      exec: ["./scripts/count-pending"]
     watcher:
       type: polling
       interval_ms: 5000
@@ -335,7 +335,7 @@ tasks:
         mcpStatus: working
         statusMessage: "Checking input"
         actions:
-          - exec: "./validate {{input.id}}"
+          - exec: ["./validate", "{{input.id}}"]
         on:
           - when: { "==": [{ var: "result.valid" }, false] }
             target: failed
@@ -345,7 +345,7 @@ tasks:
         mcpStatus: working
         statusMessage: "Running job"
         actions:
-          - exec: "./process {{input.id}}"
+          - exec: ["./process", "{{input.id}}"]
         on:
           - target: completed
 
@@ -398,7 +398,7 @@ Shape any tool's output with a JSONLogic expression. The transform receives `arg
 tools:
   - name: example
     handler:
-      exec: "./my-command"
+      exec: ["./my-command"]
     transform:
       cat:
         - "[result] "
@@ -416,7 +416,7 @@ cases:
   admin_only:
     when: { "env.has": ["ADMIN_TOKEN"] }
     handler:
-      exec: "./admin-action"
+      exec: ["./admin-action"]
   public:
     handler:
       inline:

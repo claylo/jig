@@ -47,7 +47,7 @@ export interface InlineHandler {
 }
 
 export interface ExecHandler {
-  exec: string | string[];
+  exec: string[];
   max_output_bytes?: number;
 }
 
@@ -103,7 +103,7 @@ export interface GraphqlHandler {
  * exec are accepted (inline / compute / dispatch are nonsensical at
  * boot — see Plan 5 design doc).
  */
-export type ProbeHandler = GraphqlHandler | HttpHandler | { exec: string | string[] };
+export type ProbeHandler = GraphqlHandler | HttpHandler | { exec: string[] };
 
 export interface ProbeSpec {
   handler: ProbeHandler;
@@ -671,32 +671,21 @@ function validateHandler(v: unknown, toolName: string): Handler {
     return { inline: { text: inline["text"] } };
   }
 
-  if (typeof h["exec"] === "string" || Array.isArray(h["exec"])) {
-    let exec: string | string[];
-    if (typeof h["exec"] === "string") {
-      if (h["exec"].length === 0) {
-        throw new Error(
-          `config: tools[${toolName}].handler.exec must be a non-empty string`,
-        );
-      }
-      exec = h["exec"];
-    } else {
-      const arr = h["exec"] as unknown[];
-      if (arr.length === 0) {
-        throw new Error(
-          `config: tools[${toolName}].handler.exec array must not be empty`,
-        );
-      }
-      for (let i = 0; i < arr.length; i++) {
-        if (typeof arr[i] !== "string") {
-          throw new Error(
-            `config: tools[${toolName}].handler.exec[${i}] must be a string`,
-          );
-        }
-      }
-      exec = arr as string[];
+  if (Array.isArray(h["exec"])) {
+    const arr = h["exec"] as unknown[];
+    if (arr.length === 0) {
+      throw new Error(
+        `config: tools[${toolName}].handler.exec array must not be empty`,
+      );
     }
-    const result: ExecHandler = { exec };
+    for (let i = 0; i < arr.length; i++) {
+      if (typeof arr[i] !== "string") {
+        throw new Error(
+          `config: tools[${toolName}].handler.exec[${i}] must be a string`,
+        );
+      }
+    }
+    const result: ExecHandler = { exec: arr as string[] };
     if (h["max_output_bytes"] !== undefined) {
       if (typeof h["max_output_bytes"] !== "number" || !Number.isFinite(h["max_output_bytes"]) || h["max_output_bytes"] <= 0) {
         throw new Error(
@@ -706,6 +695,12 @@ function validateHandler(v: unknown, toolName: string): Handler {
       result.max_output_bytes = h["max_output_bytes"];
     }
     return result;
+  }
+
+  if (typeof h["exec"] === "string") {
+    throw new Error(
+      `config: tools[${toolName}].handler.exec must be an array of strings, not a string`,
+    );
   }
 
   if (h["dispatch"] && typeof h["dispatch"] === "object") {

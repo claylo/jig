@@ -9,25 +9,10 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024; // 1 MB, matches Node.js default
 
 /**
- * Run a command by rendering its template through Mustache and invoking
- * `child_process.execFile`.
- *
- * Two forms:
- *   - `exec: "git log --oneline {{count}}"` (string) — legacy form,
- *     whitespace-splits the rendered string into argv. Susceptible to
- *     argument injection when template variables contain spaces.
- *   - `exec: ["git", "log", "--oneline", "{{count}}"]` (array) — each
- *     element is rendered independently and becomes exactly one argv
- *     entry regardless of content, eliminating argument injection.
- *
- * Explicitly not a shell: `shell: true` is never set, so pipes,
- * redirects, and environment variable expansion inside the command
- * string are treated as literal text. Authors who need shell features
- * write a wrapper script and exec that script. See ADR-0006.
- *
- * stdout is returned verbatim (including trailing newlines). Non-zero
- * exit, missing executable, or any other spawn error produces an
- * `isError: true` result whose text content carries the error message.
+ * Each element of handler.exec is rendered independently through Mustache
+ * and becomes exactly one argv entry — no whitespace splitting, no
+ * argument injection. Explicitly not a shell: `shell: true` is never set.
+ * See ADR-0006.
  */
 export async function invokeExec(
   handler: ExecHandler,
@@ -35,19 +20,10 @@ export async function invokeExec(
   ctx: InvokeContext,
 ): Promise<ToolCallResult> {
   const templateCtx = { ...args, probe: ctx.probe };
-  let argv: string[];
+  const argv = handler.exec.map((part) => render(part, templateCtx));
 
-  if (Array.isArray(handler.exec)) {
-    argv = handler.exec.map((part) => render(part, templateCtx));
-    if (argv.length === 0) {
-      return errorResult("exec: empty command array");
-    }
-  } else {
-    const rendered = render(handler.exec, templateCtx);
-    argv = rendered.trim().split(/\s+/).filter((part) => part.length > 0);
-    if (argv.length === 0) {
-      return errorResult(`exec: empty command after template render: "${handler.exec}"`);
-    }
+  if (argv.length === 0) {
+    return errorResult("exec: empty command array");
   }
 
   const [command, ...commandArgs] = argv;

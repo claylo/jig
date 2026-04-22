@@ -44,6 +44,21 @@ function stringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * Like render(), but encodes each interpolated value as a URI component.
+ * Literal text passes through unchanged — only template variable output
+ * is encoded. Use for URL path segments to prevent path traversal.
+ */
+export function renderUriEncoded(
+  template: string,
+  vars: Record<string, unknown>,
+): string {
+  return template.replace(TOKEN_RE, (_match, path: string) => {
+    const value = resolvePath(vars, path);
+    return encodeURIComponent(stringify(value));
+  });
+}
+
 export function renderJsonLeaves(value: unknown, data: Record<string, unknown>): unknown {
   if (typeof value === "string") return render(value, data);
   if (Array.isArray(value)) return value.map((v) => renderJsonLeaves(v, data));

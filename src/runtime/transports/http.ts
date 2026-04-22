@@ -20,6 +20,8 @@ export interface HttpTransportOptions {
   /** MCP endpoint path. Defaults to "/mcp". */
   path?: string;
   sessionIdGenerator?: () => string;
+  /** Allowed Origin headers for CORS/rebinding protection. Defaults to none (all Origins rejected). */
+  allowedOrigins?: string[];
 }
 
 export interface HttpTransportHandle {
@@ -36,13 +38,45 @@ export function createHttpTransport(
   const mcpPath = options.path ?? "/mcp";
   const hostname = options.hostname ?? "127.0.0.1";
 
+  // Build the set of allowed Host header values (loopback variants + port).
+  const allowedHosts = new Set<string>();
+  for (const h of [hostname, "127.0.0.1", "localhost", "::1"]) {
+    allowedHosts.add(`${h}:${options.port}`);
+    allowedHosts.add(h);
+  }
+
+  const allowedOrigins = options.allowedOrigins
+    ? new Set(options.allowedOrigins)
+    : undefined;
+
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: options.sessionIdGenerator ?? (() => crypto.randomUUID()),
   });
 
   const httpServer = createHttpServer(async (req, res) => {
+    // DNS-rebinding protection: reject requests whose Host header doesn't
+    // match a known loopback address. Browsers set Host from the URL bar,
+    // so a rebinding attack will carry the attacker's domain here.
+    const hostHeader = req.headers.host;
+    if (!hostHeader || !allowedHosts.has(hostHeader)) {
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end("Forbidden: invalid Host header");
+      return;
+    }
+
+    // Origin check: if Origin is present (browser requests), it must be
+    // on the allowlist. Non-browser clients (curl, MCP SDKs) omit Origin.
+    const origin = req.headers.origin;
+    if (origin !== undefined) {
+      if (!allowedOrigins || !allowedOrigins.has(origin)) {
+        res.writeHead(403, { "Content-Type": "text/plain" });
+        res.end("Forbidden: invalid Origin header");
+        return;
+      }
+    }
+
     // Only serve the MCP endpoint path.
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const url = new URL(req.url ?? "/", `http://${hostHeader}`);
     if (url.pathname !== mcpPath) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not Found");
