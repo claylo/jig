@@ -1,0 +1,1042 @@
+---
+audit_date: 2026-04-21
+scope: "Full repo audit — src/runtime, src/cli, examples, and tests"
+commit: 000653b1d5418a7fb42460d1225601edbda4ec9f
+assessment: |
+  jig is now an 8-day-old TypeScript MCP toolkit with a larger public surface than
+  the previous audit: the runtime is still compact and heavily tested, but the new
+  CLI and HTTP transport materially change its risk profile. **The Command Execution
+  Surface** still exposes reachable argument injection for string-form exec handlers.
+  **The HTTP Surface** adds one outbound request-shaping issue and one inbound local
+  transport exposure that would matter immediately on a developer workstation. **The
+  Workflow Failure Surface** and **The Runtime Maintainability Surface** are not
+  catastrophic, but both show the workflow subsystem accumulating branching and
+  failure-handling complexity quickly. **The CLI Contract Surface** and **The
+  Documentation Parity Surface** are now the dominant product-quality issues: the
+  newly documented commands and configuration promises do not yet line up with the
+  implementation. Fix the exec and HTTP issues first; the rest is mostly contract
+  tightening and surface cleanup.
+
+narratives:
+  - slug: command-execution-surface
+    title: "The Command Execution Surface"
+    thesis: "String-form exec handlers remain exploitable because user-controlled template output is split into argv after rendering."
+    verdict: "The array form of `exec` is sound, but the string form still turns whitespace in untrusted input into additional command arguments. That is a real command-boundary failure, not a documentation nit, and it should be retired or made fail-closed before more examples and users depend on it."
+
+    flow:
+      - id: tool-call
+        label: "Client calls tool"
+        type: start
+      - id: render-exec
+        label: "Render exec template"
+        type: process
+      - id: string-or-array
+        label: "exec is string?"
+        type: decision
+        findings:
+          - slug: exec-string-argv-injection
+            label: "String argv split"
+        no: exec-array
+      - id: split-argv
+        label: "Split on whitespace"
+        type: process
+      - id: spawn
+        label: "execFile(command, args)"
+        type: end
+      - id: exec-array
+        label: "Use explicit argv array"
+        type: process
+        spine: false
+        next: spawn
+
+    findings:
+      - slug: exec-string-argv-injection
+        title: "String-form exec handlers split rendered text into extra argv elements"
+        criterion: SEC-1
+        surface: "Security"
+        concern: significant
+        locations:
+          - path: src/runtime/handlers/exec.ts
+            start_line: 40
+            end_line: 57
+        evidence: |
+          if (Array.isArray(handler.exec)) {
+            argv = handler.exec.map((part) => render(part, templateCtx));
+            if (argv.length === 0) {
+              return errorResult("exec: empty command array");
+            }
+          } else {
+            const rendered = render(handler.exec, templateCtx);
+            argv = rendered.trim().split(/\s+/).filter((part) => part.length > 0);
+            if (argv.length === 0) {
+              return errorResult(`exec: empty command after template render: "${handler.exec}"`);
+            }
+          }
+
+          const [command, ...commandArgs] = argv;
+
+          try {
+            const maxBuffer = handler.max_output_bytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+            const { stdout } = await execFileAsync(command!, commandArgs, { maxBuffer });
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "7-8"
+            type: del
+            label: "Rendered user input becomes multiple argv elements"
+          - lines: "18"
+            type: mark
+            label: "The split argv is passed directly to execFile"
+        mechanism: |
+          A malicious MCP client controls `args`, those values are rendered into the
+          configured exec template, and the string-form branch then tokenizes the
+          result with `split(/\s+/)`. That is reachable argument injection: any value
+          containing spaces can introduce extra flags or positional arguments to the
+          configured binary. `execFile` prevents shell metacharacter injection, but it
+          does not protect against unintended argv expansion after template rendering.
+        remediation: |
+          Remove or deprecate the string form and require `exec` to be an explicit argv
+          array. Render each array element independently and pass the resulting array
+          straight to `execFile`. If the string form must survive for compatibility,
+          fail closed at parse time unless the rendered value is guaranteed to map to a
+          single argv element.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 5
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [handler-parsing-is-order-dependent]
+        effort: medium
+        effort_notes: "Requires a config-surface change plus docs and tests."
+
+  - slug: http-surface
+    title: "The HTTP Surface"
+    thesis: "Both outbound HTTP tooling and the inbound loopback transport trust more of the request path than they should."
+    verdict: "The host allowlist work from the previous audit is still valuable, but it is not the whole HTTP story. Outbound handlers still let a caller reshape the path within an allowed host, and the new local HTTP transport is exposed without the rebinding defenses that browsers force every localhost service to think about."
+
+    flow:
+      - id: enable-http
+        label: "Enable HTTP capability"
+        type: start
+      - id: inbound-or-outbound
+        label: "Outbound call or local transport?"
+        type: decision
+        no: local-transport
+      - id: render-path
+        label: "Render path template"
+        type: process
+        findings:
+          - slug: http-path-template-traversal
+            label: "Raw path append"
+      - id: send-request
+        label: "Send request to allowed host"
+        type: end
+      - id: local-transport
+        label: "Create loopback MCP listener"
+        type: process
+        spine: false
+        findings:
+          - slug: http-transport-dns-rebinding
+            label: "No host/origin gate"
+        next: route-local
+      - id: route-local
+        label: "Route by path only"
+        type: process
+        spine: false
+        next: send-request
+
+    findings:
+      - slug: http-path-template-traversal
+        title: "HTTP path templates are concatenated without segment encoding"
+        criterion: SEC-1
+        surface: "Security"
+        concern: moderate
+        locations:
+          - path: src/runtime/handlers/http.ts
+            start_line: 47
+            end_line: 59
+        evidence: |
+          // Step 2 — render path + query + header values
+          const pathRendered = spec.path !== undefined ? render(spec.path, renderCtx) : "";
+          let fullUrl = baseUrl + pathRendered;
+          if (spec.query !== undefined) {
+            const params = new URLSearchParams();
+            for (const [k, v] of Object.entries(spec.query)) {
+              params.append(k, render(v, renderCtx));
+            }
+            const qs = params.toString();
+            if (qs.length > 0) {
+              fullUrl += (fullUrl.includes("?") ? "&" : "?") + qs;
+            }
+          }
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "2-3"
+            type: del
+            label: "Rendered path text is appended raw"
+          - lines: "5-11"
+            type: mark
+            label: "Only query values are URL-encoded"
+        mechanism: |
+          Tool-call arguments flow into `render(spec.path, ...)` and are concatenated
+          directly onto the base URL. Because the handler does not encode per path
+          segment, a caller can inject `/`, `..`, `?`, or `#` and reshape the request
+          target within the already-allowed host. That turns endpoint templates such as
+          `/items/{{id}}` into route traversal within the upstream API.
+        remediation: |
+          Stop concatenating raw path text. Treat interpolated path values as segments,
+          `encodeURIComponent` each one before joining, and reject slash-bearing or
+          query-bearing substitutions where the template is supposed to represent a
+          single path segment.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 3
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: small
+        effort_notes: "Local handler fix plus a regression test around path encoding."
+
+      - slug: http-transport-dns-rebinding
+        title: "Loopback HTTP transport is exposed without rebinding or origin checks"
+        criterion: SEC-5
+        surface: "Security"
+        concern: significant
+        locations:
+          - path: src/runtime/transports/http.ts
+            start_line: 36
+            end_line: 55
+        evidence: |
+          const mcpPath = options.path ?? "/mcp";
+          const hostname = options.hostname ?? "127.0.0.1";
+
+          const transport = new WebStandardStreamableHTTPServerTransport({
+            sessionIdGenerator: options.sessionIdGenerator ?? (() => crypto.randomUUID()),
+          });
+
+          const httpServer = createHttpServer(async (req, res) => {
+            // Only serve the MCP endpoint path.
+            const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+            if (url.pathname !== mcpPath) {
+              res.writeHead(404, { "Content-Type": "text/plain" });
+              res.end("Not Found");
+              return;
+            }
+
+            try {
+              const webRequest = nodeToWebRequest(req, url);
+              const webResponse = await transport.handleRequest(webRequest);
+              await writeWebResponse(webResponse, res);
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "4-6"
+            type: del
+            label: "Transport is created without host/origin restrictions"
+          - lines: "8-14"
+            type: mark
+            label: "Requests are accepted on loopback and routed purely by path"
+        mechanism: |
+          The local HTTP transport is reachable whenever the CLI is started with
+          `--port`, but the transport is instantiated with no allowed hosts or origins.
+          That means the service relies only on loopback binding and path matching.
+          In practice that leaves it exposed to DNS rebinding or browser-origin abuse
+          on a developer machine, because the MCP session handshake is reachable from
+          the local browser without an explicit second factor.
+        remediation: |
+          Configure the underlying transport with explicit host and origin checks, and
+          reject requests whose `Host` or `Origin` are not on an allowlist. If browser
+          access must stay supported, add an explicit auth gate ahead of the MCP session
+          handshake and cover the rebinding case with a regression test.
+        temporal:
+          introduced: "2026-04-21"
+          last_modified: "2026-04-21"
+          commit_count: 1
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [build-port-flag-is-ignored]
+        effort: medium
+        effort_notes: "Requires transport-option plumbing plus a focused security test."
+
+  - slug: workflow-failure-surface
+    title: "The Workflow Failure Surface"
+    thesis: "Workflow failures are usually detected, but two branches still hide the real cause from the task result that clients actually observe."
+    verdict: "The task interpreter is close to having a coherent failure contract, but it still loses one class of terminal write error entirely and collapses another into a generic stall. Neither bug corrupts state, but both degrade the reliability of the one surface callers depend on when a task goes wrong."
+
+    flow:
+      - id: workflow-run
+        label: "Run workflow state"
+        type: start
+      - id: actions
+        label: "Execute actions"
+        type: process
+      - id: guard-check
+        label: "Evaluate transitions"
+        type: process
+        findings:
+          - slug: transition-guard-errors-collapse-to-generic-stall
+            label: "Guard cause lost"
+      - id: fail-task
+        label: "safeFail stores result"
+        type: process
+        findings:
+          - slug: task-result-write-failures-swallowed
+            label: "Terminal write dropped"
+      - id: client-poll
+        label: "Client polls task state"
+        type: end
+
+    findings:
+      - slug: task-result-write-failures-swallowed
+        title: "Failed task results are dropped when the store rejects"
+        criterion: EH-2
+        surface: "Error Handling"
+        concern: moderate
+        locations:
+          - path: src/runtime/tasks.ts
+            start_line: 737
+            end_line: 750
+        evidence: |
+          async function safeFail(
+            store: InterpreterTaskStore,
+            taskId: string,
+            message: string,
+          ): Promise<void> {
+            try {
+              await store.storeTaskResult(taskId, "failed", {
+                content: [{ type: "text", text: message }],
+                isError: true,
+              });
+            } catch {
+              // Nothing left to do; the store is the only output channel.
+            }
+          }
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "11-12"
+            type: del
+            label: "Rejected task-result write is silently discarded"
+        mechanism: |
+          `safeFail()` is the common terminal path for workflow failures. If
+          `storeTaskResult()` rejects, the empty catch swallows both the original
+          workflow error and the persistence failure, leaving no visible terminal state
+          for the client. That makes task-store instability indistinguishable from a
+          hung or vanished task.
+        remediation: |
+          Do not swallow the store failure. At minimum, emit a fatal log with `taskId`
+          and the original message, and propagate the failure so operators can see that
+          the task store itself failed. Add a regression test that forces
+          `storeTaskResult()` to reject and asserts the failure stays visible.
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-18"
+          commit_count: 6
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [workflow-interpreter-is-too-dense]
+        effort: small
+        effort_notes: "Local helper change plus one regression test."
+
+      - slug: transition-guard-errors-collapse-to-generic-stall
+        title: "Transition guard exceptions become a generic stalled-workflow result"
+        criterion: EH-5
+        surface: "Error Handling"
+        concern: moderate
+        locations:
+          - path: src/runtime/tasks.ts
+            start_line: 669
+            end_line: 688
+        evidence: |
+          async function pickTransition(
+            transitions: TransitionSpec[],
+            workflowCtx: Record<string, unknown>,
+          ): Promise<TransitionSpec | undefined> {
+            for (const t of transitions) {
+              if (t.when === undefined) return t;
+              let matched: unknown;
+              try {
+                matched = await evalJsonLogic(t.when as JsonLogicRule, workflowCtx);
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                process.stderr.write(
+                  `jig: when: guard error (skipping transition to "${t.target}"): ${msg}\n`,
+                );
+                continue;
+              }
+              if (matched) return t;
+            }
+            return undefined;
+          }
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "8-15"
+            type: del
+            label: "Thrown guard is logged and skipped instead of becoming a terminal task failure"
+        mechanism: |
+          When a `when:` guard throws, `pickTransition()` logs the exception to stderr
+          and treats that transition as a non-match. The caller sees only `undefined`
+          from `pickTransition()`, and when no later transition matches the workflow is
+          reported as a generic stall. That strips the actual guard failure out of the
+          task surface even though the guard error is the real reason the workflow could
+          not progress.
+        remediation: |
+          Promote thrown guard errors into the task result instead of collapsing them
+          into a generic stall. Either fail immediately on the first thrown guard or
+          retain the first thrown error and include it in the terminal result when all
+          transitions fail.
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-18"
+          commit_count: 6
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [workflow-interpreter-is-too-dense]
+        effort: small
+        effort_notes: "One control-flow change in transition evaluation plus tests."
+
+  - slug: runtime-maintainability-surface
+    title: "The Runtime Maintainability Surface"
+    thesis: "The runtime is still readable, but the parser and workflow core are starting to encode behavior in control-flow accidents rather than explicit contracts."
+    verdict: "This is not yet rewrite territory, but it is the point where small conveniences become future bugs. The handler union should become explicit before more handler types land, and the workflow interpreter needs decomposition before the next round of task features makes it too risky to touch."
+
+    flow:
+      - id: author-yaml
+        label: "Author writes YAML"
+        type: start
+      - id: validate-handler
+        label: "validateHandler picks first branch"
+        type: process
+        findings:
+          - slug: handler-parsing-is-order-dependent
+            label: "Branch order matters"
+      - id: boot-runtime
+        label: "Boot runtime"
+        type: process
+      - id: interpret-workflow
+        label: "interpretWorkflow main loop"
+        type: process
+        findings:
+          - slug: workflow-interpreter-is-too-dense
+            label: "Dense control flow"
+      - id: future-change
+        label: "Land next feature safely"
+        type: end
+
+    findings:
+      - slug: handler-parsing-is-order-dependent
+        title: "Handler parsing is order-dependent and can accept mixed shapes"
+        criterion: CQ-5
+        surface: "Code Quality"
+        concern: significant
+        locations:
+          - path: src/runtime/config.ts
+            start_line: 658
+            end_line: 736
+        evidence: |
+          function validateHandler(v: unknown, toolName: string): Handler {
+            if (!v || typeof v !== "object") {
+              throw new Error(`config: tools[${toolName}].handler must be a mapping`);
+            }
+            const h = v as Record<string, unknown>;
+
+            if (h["inline"] && typeof h["inline"] === "object") {
+              const inline = h["inline"] as Record<string, unknown>;
+              if (typeof inline["text"] !== "string") {
+                throw new Error(
+                  `config: tools[${toolName}].handler.inline.text must be a string`,
+                );
+              }
+              return { inline: { text: inline["text"] } };
+            }
+
+            if (typeof h["exec"] === "string" || Array.isArray(h["exec"])) {
+              let exec: string | string[];
+              if (typeof h["exec"] === "string") {
+                if (h["exec"].length === 0) {
+                  throw new Error(
+                    `config: tools[${toolName}].handler.exec must be a non-empty string`,
+                  );
+                }
+                exec = h["exec"];
+              } else {
+                const arr = h["exec"] as unknown[];
+                if (arr.length === 0) {
+                  throw new Error(
+                    `config: tools[${toolName}].handler.exec array must not be empty`,
+                  );
+                }
+                for (let i = 0; i < arr.length; i++) {
+                  if (typeof arr[i] !== "string") {
+                    throw new Error(
+                      `config: tools[${toolName}].handler.exec[${i}] must be a string`,
+                    );
+                  }
+                }
+                exec = arr as string[];
+              }
+              const result: ExecHandler = { exec };
+              if (h["max_output_bytes"] !== undefined) {
+                if (typeof h["max_output_bytes"] !== "number" || !Number.isFinite(h["max_output_bytes"]) || h["max_output_bytes"] <= 0) {
+                  throw new Error(
+                    `config: tools[${toolName}].handler.max_output_bytes must be a positive number`,
+                  );
+                }
+                result.max_output_bytes = h["max_output_bytes"];
+              }
+              return result;
+            }
+
+            if (h["dispatch"] && typeof h["dispatch"] === "object") {
+              return validateDispatch(h["dispatch"], toolName);
+            }
+
+            if ("compute" in h) {
+              // JSONLogic rules are arbitrary JSON; we do no structural validation
+              // at parse time. Unknown operators surface at invoke time as isError
+              // tool results, not as config errors.
+              return { compute: h["compute"] };
+            }
+
+            if (h["http"] && typeof h["http"] === "object") {
+              return validateHttp(h["http"], toolName);
+            }
+
+            if (h["graphql"] && typeof h["graphql"] === "object") {
+              return validateGraphql(h["graphql"], toolName);
+            }
+
+            if (h["workflow"] && typeof h["workflow"] === "object") {
+              return validateWorkflowHandler(h["workflow"], toolName);
+            }
+
+            throw new Error(
+              `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http, graphql, workflow)`,
+            );
+          }
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "7-14"
+            type: del
+            label: "First matching branch returns immediately"
+          - lines: "17-51"
+            type: mark
+            label: "The exec branch also returns before exclusivity is checked"
+          - lines: "58-75"
+            type: mark
+            label: "Later shapes depend on the earlier branches not matching"
+        mechanism: |
+          `validateHandler()` is not validating a discriminated union; it is walking a
+          list of possible handler keys and returning on the first one that matches. A
+          malformed handler object containing multiple shapes is therefore accepted as
+          whichever branch appears first in the function. That makes behavior depend on
+          branch order and turns future handler additions into compatibility hazards.
+        remediation: |
+          Collect the present handler keys first, require exactly one recognized shape,
+          reject unknown or extra keys, and only then dispatch to the subtype validator.
+          That keeps the union contract explicit instead of encoding it in statement
+          order.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 27
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 27]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [exec-string-argv-injection]
+        effort: small
+        effort_notes: "One parser refactor following the existing validator style."
+
+      - slug: workflow-interpreter-is-too-dense
+        title: "Workflow interpretation is too dense to change safely"
+        criterion: CQ-1
+        surface: "Code Quality"
+        concern: significant
+        locations:
+          - path: src/runtime/tasks.ts
+            start_line: 534
+            end_line: 667
+        evidence: |
+          export async function interpretWorkflow(
+            opts: InterpretWorkflowOptions,
+          ): Promise<void> {
+            const { workflow, args, ctx, store, taskId, invoke, elicit } = opts;
+            const workflowCtx: {
+              input: Record<string, unknown>;
+              result: unknown;
+              probe: Record<string, unknown>;
+              elicitation: Record<string, unknown>;
+            } = {
+              input: args,
+              result: undefined,
+              probe: ctx.probe,
+              elicitation: {},
+            };
+
+            let current = workflow.initial;
+            const MAX_STEPS = 1024;
+            let steps = 0;
+
+            while (steps++ < MAX_STEPS) {
+              const state = workflow.states[current];
+              if (!state) {
+                await safeFail(
+                  store,
+                  taskId,
+                  `interpreter: state "${current}" not declared (this is a jig bug — should have been caught at parse time)`,
+                );
+                return;
+              }
+
+              void store
+                .updateTaskStatus(taskId, state.mcpStatus, state.statusMessage)
+                .catch((err: unknown) => {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  process.stderr.write(`jig: status update failed for task ${taskId}: ${msg}\n`);
+                });
+
+              // ── input_required: elicit and bind ──
+              if (state.mcpStatus === "input_required" && state.elicitation !== undefined) {
+                let elicitResult: ElicitResponse;
+                try {
+                  elicitResult = await elicit({
+                    message: state.elicitation.message,
+                    requestedSchema: buildRequestedSchema(state.elicitation),
+                  });
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : String(err);
+                  await safeFail(
+                    store,
+                    taskId,
+                    `elicitation failed in state "${current}": ${message}`,
+                  );
+                  return;
+                }
+                // Bind response: action is always present; content fields spread in.
+                workflowCtx.elicitation = {
+                  action: elicitResult.action,
+                  ...(elicitResult.content ?? {}),
+                };
+                // Fall through to transition evaluation (no actions on input_required states).
+              }
+
+              // Run actions in sequence; capture each result; the last one wins.
+              if (state.actions !== undefined) {
+                let actionResult: ToolCallResult | undefined;
+                for (let i = 0; i < state.actions.length; i++) {
+                  try {
+                    actionResult = await invoke(state.actions[i]!, args, ctx);
+                  } catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    await safeFail(
+                      store,
+                      taskId,
+                      `action ${i} (state "${current}") threw: ${message}`,
+                    );
+                    return;
+                  }
+                  if (actionResult.isError) {
+                    const text = actionResult.content[0]?.text ?? "<no error text>";
+                    await safeFail(
+                      store,
+                      taskId,
+                      `action ${i} (state "${current}") failed: ${text}`,
+                    );
+                    return;
+                  }
+                }
+                if (actionResult !== undefined) {
+                  workflowCtx.result = parseActionResult(actionResult);
+                }
+              }
+
+              // Terminal state? Render and store.
+              if (state.result !== undefined) {
+                const rendered = render(state.result.text, workflowCtx);
+                const storeStatus: "completed" | "failed" =
+                  state.mcpStatus === "failed" ? "failed" : "completed";
+                const finalResult: CallToolResult = {
+                  content: [{ type: "text", text: rendered }],
+                  ...(storeStatus === "failed" && { isError: true }),
+                };
+                await store.storeTaskResult(taskId, storeStatus, finalResult);
+                return;
+              }
+
+              // Pick the first matching transition.
+              if (state.on === undefined || state.on.length === 0) {
+                await safeFail(
+                  store,
+                  taskId,
+                  `interpreter: state "${current}" is non-terminal but has no on: transitions`,
+                );
+                return;
+              }
+
+              const next = await pickTransition(state.on, workflowCtx);
+              if (next === undefined) {
+                await safeFail(
+                  store,
+                  taskId,
+                  `interpreter: no transition matched in state "${current}" — workflow stalled`,
+                );
+                return;
+              }
+              current = next.target;
+            }
+
+            await safeFail(
+              store,
+              taskId,
+              `interpreter: max steps (${MAX_STEPS}) exceeded — likely a transition loop`,
+            );
+          }
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "32-37"
+            type: mark
+            label: "Status updates are embedded in the main loop"
+          - lines: "39-62"
+            type: mark
+            label: "Elicitation handling sits in the same control path"
+          - lines: "64-91"
+            type: mark
+            label: "Action execution and failure handling are inlined"
+          - lines: "94-104"
+            type: mark
+            label: "Terminal rendering and storage happen here too"
+          - lines: "107-133"
+            type: del
+            label: "Transition selection, loop detection, and failure cases all share the same function"
+        mechanism: |
+          `interpretWorkflow()` currently owns status updates, elicitation, action
+          execution, terminal rendering, transition selection, and loop detection inside
+          one nested loop. It is still understandable with concentration, but the shape
+          is already dense enough that each new workflow feature has to be threaded
+          through multiple early-return branches and failure exits. That is how subtle
+          regressions in the task subsystem become hard to review.
+        remediation: |
+          Split the interpreter into phase helpers and keep the top-level loop as
+          orchestration only. At minimum, separate status updates, action execution,
+          terminal rendering, and transition resolution into smaller functions with one
+          responsibility each.
+        temporal:
+          introduced: "2026-04-16"
+          last_modified: "2026-04-18"
+          commit_count: 6
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [task-result-write-failures-swallowed, transition-guard-errors-collapse-to-generic-stall]
+        effort: medium
+        effort_notes: "A structured refactor, but localized to one module."
+
+  - slug: cli-contract-surface
+    title: "The CLI Contract Surface"
+    thesis: "The newly added CLI ships real user-facing mismatches between what the help text advertises and what the command handlers actually do."
+    verdict: "These are not internal papercuts; they are the first things a user sees. The good news is that each bug is local to the new CLI layer. The bad news is that the current help text cannot be treated as trustworthy documentation until the flag handling is brought back into sync."
+
+    findings:
+      - slug: cli-version-flag-never-reaches-version-branch
+        title: "Top-level `jig --version` exits early with usage instead of printing the version"
+        criterion: FC-5
+        surface: "Completeness"
+        concern: moderate
+        locations:
+          - path: src/cli/index.ts
+            start_line: 27
+            end_line: 45
+        evidence: |
+          if (!command || command === "help") {
+            process.stdout.write(USAGE + "\n");
+            process.exit(0);
+          }
+
+          const flagArgs = process.argv.slice(2);
+          if (flagArgs.includes("-h") || flagArgs.includes("--help")) {
+            if (!command || command === "help") {
+              process.stdout.write(USAGE + "\n");
+              process.exit(0);
+            }
+          }
+
+          if (flagArgs.includes("-V") || flagArgs.includes("--version")) {
+            const { createRequire } = await import("node:module");
+            const require = createRequire(import.meta.url);
+            const pkg = require("../../package.json") as { version: string };
+            process.stdout.write(pkg.version + "\n");
+            process.exit(0);
+          }
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "1-4"
+            type: del
+            label: "No-command invocations exit before version handling"
+          - lines: "14-19"
+            type: mark
+            label: "The version branch exists, but it is unreachable for `jig --version`"
+        mechanism: |
+          `parseArgs()` leaves no positional command for `jig --version`, so the early
+          no-command exit fires before the later version branch can run. The code does
+          have version-printing logic, but the branch order makes the documented
+          top-level flag unreachable in practice.
+        remediation: |
+          Check `-V/--version` before the no-command exit, or parse `version` as a
+          top-level option and route it before subcommand dispatch.
+        temporal:
+          introduced: "2026-04-21"
+          last_modified: "2026-04-21"
+          commit_count: 2
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [dev-no-watch-flag-is-not-supported, build-port-flag-is-ignored]
+        effort: trivial
+        effort_notes: "One branch-order fix in the CLI entry point."
+
+      - slug: dev-no-watch-flag-is-not-supported
+        title: "The documented `jig dev --no-watch` flag does not disable hot-reload"
+        criterion: FC-5
+        surface: "Completeness"
+        concern: significant
+        locations:
+          - path: src/cli/dev.ts
+            start_line: 27
+            end_line: 40
+        evidence: |
+          Options:
+            --port <n>       Serve over HTTP on this port (default: stdio)
+            --no-watch       Disable hot-reload
+            -h, --help       Show this help`;
+
+          export async function run(argv: string[]): Promise<void> {
+            const { positionals, values } = parseArgs({
+              args: argv,
+              allowPositionals: true,
+              options: {
+                help: { type: "boolean", short: "h" },
+                port: { type: "string" },
+                watch: { type: "boolean", default: true },
+              },
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "2-3"
+            type: mark
+            label: "Help text advertises `--no-watch`"
+          - lines: "10-14"
+            type: del
+            label: "The parser only defines `watch`, not `no-watch`"
+        mechanism: |
+          The command's own usage text promises `--no-watch`, but the parser only
+          declares a `watch` option. Under Node's strict argument parsing, `--no-watch`
+          is an unknown flag, so the command fails before the runtime ever starts.
+        remediation: |
+          Add an explicit `no-watch` option or normalize `--no-watch` into
+          `watch: false` before parsing. Keep the watcher gate keyed to the same
+          user-facing flag name the help text advertises.
+        temporal:
+          introduced: "2026-04-21"
+          last_modified: "2026-04-21"
+          commit_count: 2
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [cli-version-flag-never-reaches-version-branch, build-port-flag-is-ignored]
+        effort: small
+        effort_notes: "Localized parser and help-text alignment."
+
+      - slug: build-port-flag-is-ignored
+        title: "The `jig build --port` option is advertised but never affects the bundle"
+        criterion: API-1
+        surface: "API Design"
+        concern: moderate
+        locations:
+          - path: src/cli/build.ts
+            start_line: 29
+            end_line: 45
+        evidence: |
+          Options:
+            -o, --output <path>   Output file path (required)
+            --bare                Produce a generic engine with no embedded YAML;
+                                  expects a sibling jig.yaml at runtime
+            --port <n>            Bake in HTTP transport on this port (default: stdio)
+            -h, --help            Show this help`;
+
+          export async function run(argv: string[]): Promise<void> {
+            const { positionals, values } = parseArgs({
+              args: argv,
+              allowPositionals: true,
+              options: {
+                help: { type: "boolean", short: "h" },
+                output: { type: "string", short: "o" },
+                bare: { type: "boolean", default: false },
+                port: { type: "string" },
+              },
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "5"
+            type: mark
+            label: "The help text promises build-time transport behavior"
+          - lines: "12-17"
+            type: del
+            label: "The option is parsed, but this handler never uses it"
+        mechanism: |
+          The build command advertises `--port` as if it changes the generated artifact,
+          but in this handler the value is only parsed and never threaded into the
+          embedded config, runtime banner, or output wrapper. That leaves the user-facing
+          CLI contract promising behavior the implementation does not deliver.
+        remediation: |
+          Either wire `--port` into the generated artifact so it changes the built
+          server's default transport, or remove the flag from the build command until
+          that behavior actually exists.
+        temporal:
+          introduced: "2026-04-21"
+          last_modified: "2026-04-21"
+          commit_count: 2
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+        chains:
+          enables: []
+          enabled_by: []
+          related: [http-transport-dns-rebinding]
+        effort: small
+        effort_notes: "Either a local docs cleanup or a small feature-plumbing change."
+
+  - slug: documentation-parity-surface
+    title: "The Documentation Parity Surface"
+    thesis: "The README now overstates two capabilities: supported watcher types and when `${VAR}` connection placeholders are actually resolved."
+    verdict: "The documentation is trying to lead users into the newly expanded surface area, but it currently gets ahead of the implementation. Both findings are straightforward to resolve, but until they are, the README is better treated as aspirational than authoritative in these two areas."
+
+    findings:
+      - slug: webhook-watcher-type-advertised-but-rejected
+        title: "README advertises `webhook` watchers, but the runtime only accepts `polling` and `file`"
+        criterion: FC-1
+        surface: "Completeness"
+        concern: significant
+        locations:
+          - path: README.md
+            start_line: 289
+            end_line: 305
+        evidence: |
+          Expose data that MCP clients can read and subscribe to:
+
+          ```yaml
+          resources:
+            - uri: data://queue/pending
+              name: Pending Jobs
+              description: Current pending job count
+              mimeType: application/json
+              handler:
+                exec: "./scripts/count-pending"
+              watcher:
+                type: polling
+                interval_ms: 5000
+                change_detection: hash
+          ```
+
+          Watcher types: `polling` (interval + hash), `file` (filesystem watch), `webhook` (HTTP trigger).
+        evidence_lang: markdown
+        evidence_markers:
+          - lines: "17"
+            type: del
+            label: "README claims `webhook` is supported"
+        mechanism: |
+          The runtime's watcher validator only accepts `polling` and `file`, so any
+          config that follows the README's advertised `webhook` type fails during parse
+          time instead of starting a watcher. This is a hard product-contract mismatch,
+          not an optional enhancement.
+        remediation: |
+          Either remove `webhook` from the README immediately or implement it end to end
+          by extending the watcher schema, validator, and runtime dispatcher together.
+        temporal:
+          introduced: "2026-04-21"
+          last_modified: "2026-04-21"
+          commit_count: 3
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: medium
+        effort_notes: "Docs-only if webhook stays out of scope; larger if implemented."
+
+      - slug: env-vars-are-not-resolved-at-boot
+        title: "Connection header rules resolve on first use, not at boot as documented"
+        criterion: FC-1
+        surface: "Completeness"
+        concern: significant
+        locations:
+          - path: src/runtime/connections.ts
+            start_line: 50
+            end_line: 70
+        evidence: |
+          /**
+           * Resolve a compiled connection's headers to a concrete
+           * Record<string, string>. Results are cached after first evaluation
+           * because rules evaluate against an empty context — the output is
+           * deterministic for the process lifetime.
+           */
+          export async function resolveHeaders(
+            compiled: CompiledConnection,
+          ): Promise<Record<string, string>> {
+            const cached = headerCache.get(compiled);
+            if (cached) return cached;
+
+            const out: Record<string, string> = {};
+            for (const h of compiled.headers) {
+              if (h.kind === "literal") {
+                out[h.name] = h.value;
+                continue;
+              }
+              const val = await evaluate(h.rule, {});
+              out[h.name] = stringify(val);
+            }
+        evidence_lang: typescript
+        evidence_markers:
+          - lines: "2-5"
+            type: mark
+            label: "The comment itself documents first-use evaluation"
+          - lines: "12-20"
+            type: del
+            label: "Header rules are evaluated lazily during `resolveHeaders()`"
+        mechanism: |
+          The README says `${VAR}` placeholders in connections are resolved at boot and
+          missing variables abort startup. The implementation does something weaker: it
+          compiles header rules at boot, but evaluates them only when `resolveHeaders()`
+          runs on the first outbound request. That means unresolved or missing variables
+          can survive startup and only surface later when the connection is used.
+        remediation: |
+          Either validate `${VAR}` references eagerly during config load and fail boot on
+          missing values, or change the docs to describe the current lazy resolution
+          semantics accurately.
+        temporal:
+          introduced: "2026-04-14"
+          last_modified: "2026-04-18"
+          commit_count: 3
+          monthly_commits: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+        chains:
+          enables: []
+          enabled_by: []
+          related: []
+        effort: medium
+        effort_notes: "Either eager validation in config loading or a docs correction."
+
+summary:
+  counts:
+    critical: 0
+    significant: 7
+    moderate: 5
+    advisory: 0
+    note: 0
