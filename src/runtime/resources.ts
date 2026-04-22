@@ -441,8 +441,21 @@ function startWebhookWatcher(
   const webhookPath = watcher.path ?? "/webhook";
   let httpServer: Server | undefined;
 
+  const allowedHosts = new Set<string>();
+  for (const h of ["127.0.0.1", "localhost", "::1"]) {
+    allowedHosts.add(`${h}:${watcher.port}`);
+    allowedHosts.add(h);
+  }
+
   try {
     httpServer = createHttpServer((req, res) => {
+      const hostHeader = req.headers.host;
+      if (!hostHeader || !allowedHosts.has(hostHeader)) {
+        res.writeHead(403, { "Content-Type": "text/plain" });
+        res.end("Forbidden");
+        return;
+      }
+
       if (req.method !== "POST" || req.url !== webhookPath) {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Not Found");

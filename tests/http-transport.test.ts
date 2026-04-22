@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -251,6 +252,85 @@ test("HTTP transport: 404 on non-MCP path", { timeout: 15_000 }, async () => {
     await ready;
     const res = await fetch(`http://127.0.0.1:${port}/not-mcp`);
     assert.equal(res.status, 404);
+  } finally {
+    cleanup(child);
+  }
+});
+
+test("HTTP transport: 403 on invalid Host header", { timeout: 15_000 }, async () => {
+  const { configPath, port, cleanup } = setupTest();
+  const { child, ready } = startServer(configPath, port);
+
+  try {
+    await ready;
+    // fetch() won't reliably send a spoofed Host header, so use node:http
+    const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: "/mcp",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Host: "evil.com",
+          },
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+          res.on("end", () => resolve({ status: res.statusCode!, body: data }));
+        },
+      );
+      req.on("error", reject);
+      req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: INIT_PARAMS }));
+    });
+    assert.equal(status, 403);
+    assert.ok(body.includes("Forbidden"), `expected Forbidden in body, got: ${body}`);
+  } finally {
+    cleanup(child);
+  }
+});
+
+test("HTTP transport: 403 on Origin header (no allowlist configured)", { timeout: 15_000 }, async () => {
+  const { configPath, port, cleanup } = setupTest();
+  const { child, ready } = startServer(configPath, port);
+
+  try {
+    await ready;
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Host: `127.0.0.1:${port}`,
+        Origin: "http://evil.com",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: INIT_PARAMS }),
+    });
+    assert.equal(res.status, 403);
+    const body = await res.text();
+    assert.ok(body.includes("Forbidden"), `expected Forbidden in body, got: ${body}`);
+  } finally {
+    cleanup(child);
+  }
+});
+
+test("HTTP transport: allows request with correct loopback Host", { timeout: 15_000 }, async () => {
+  const { configPath, port, cleanup } = setupTest();
+  const { child, ready } = startServer(configPath, port);
+
+  try {
+    await ready;
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Host: `127.0.0.1:${port}`,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: INIT_PARAMS }),
+    });
+    assert.notEqual(res.status, 403, `expected non-403 status, got 403`);
   } finally {
     cleanup(child);
   }
