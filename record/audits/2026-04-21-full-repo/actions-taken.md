@@ -2,12 +2,12 @@
 audit: 2026-04-21-Full repo audit — src/runtime, src/cli, examples, and tests
 last_updated: 2026-04-21
 status:
-  fixed: 9
+  fixed: 10
   mitigated: 0
   accepted: 0
   disputed: 0
   deferred: 0
-  open: 3
+  open: 2
 ---
 
 # Actions Taken: Full repo audit — src/runtime, src/cli, examples, and tests
@@ -146,3 +146,24 @@ The empty `catch` in `safeFail()` now writes both the original workflow failure
 message and the store rejection error to stderr. The store is still the only
 output channel for the task result, but an operator watching logs will see both
 failures instead of silent disappearance.
+
+---
+
+## 2026-04-21 — Decompose workflow interpreter into phase functions
+
+**Disposition:** fixed
+**Addresses:** [workflow-interpreter-is-too-dense](README.md#workflow-interpreter-is-too-dense)
+**Commit:** pending (staged on refactor/workflow-interpreter)
+**Author:** Clay Loveless + Claude
+
+Rewrote `interpretWorkflow()` as a thin orchestration loop over typed phase
+functions. Introduced `StepOutcome` discriminated union (`advance` | `terminal`
+| `failed`) so each phase returns a value instead of calling `safeFail()` and
+returning void. The top-level loop reads the outcome and dispatches.
+
+Extracted: `executeState()` (per-state dispatch), `runElicitation()`,
+`runActions()`, `renderTerminal()`, `resolveTransition()`, `emitStatus()`.
+Each owns one concern and can be changed without reading the others. Renamed
+`safeFail()` to `fail()`. Added `WorkflowCtx` interface.
+
+Same behavior, same 349 tests passing, same error messages.
