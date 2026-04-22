@@ -2,12 +2,12 @@
 audit: 2026-04-21-Full repo audit — src/runtime, src/cli, examples, and tests
 last_updated: 2026-04-21
 status:
-  fixed: 3
+  fixed: 6
   mitigated: 0
   accepted: 0
   disputed: 0
   deferred: 0
-  open: 9
+  open: 6
 ---
 
 # Actions Taken: Full repo audit — src/runtime, src/cli, examples, and tests
@@ -63,3 +63,44 @@ include an `Origin` header are checked against an explicit allowlist
 (`allowedOrigins` option); if no allowlist is configured, all Origin-bearing
 requests are rejected. Non-browser clients (curl, MCP SDKs) that omit Origin are
 unaffected.
+
+---
+
+## 2026-04-21 — Move --version check before subcommand dispatch
+
+**Disposition:** fixed
+**Addresses:** [cli-version-flag-never-reaches-version-branch](README.md#cli-version-flag-never-reaches-version-branch)
+**Commit:** pending (staged on fix/audit-cli-contract)
+**Author:** Clay Loveless + Claude
+
+Moved the `-V`/`--version` check to run before `parseArgs` and the no-command
+bail-out in `src/cli/index.ts`. `jig --version` now prints the version instead
+of showing the usage banner.
+
+---
+
+## 2026-04-21 — Enable --no-watch negation in dev command
+
+**Disposition:** fixed
+**Addresses:** [dev-no-watch-flag-is-not-supported](README.md#dev-no-watch-flag-is-not-supported)
+**Commit:** pending (staged on fix/audit-cli-contract)
+**Author:** Clay Loveless + Claude
+
+Added `negatable: true` to the `watch` option in `src/cli/dev.ts`. Node's
+`parseArgs` strict mode now accepts `--no-watch` and sets `values.watch` to
+`false`, matching the documented behavior in the help text.
+
+---
+
+## 2026-04-21 — Wire --port into build output via embeddedPort
+
+**Disposition:** fixed
+**Addresses:** [build-port-flag-is-ignored](README.md#build-port-flag-is-ignored)
+**Commit:** pending (staged on fix/audit-cli-contract)
+**Author:** Clay Loveless + Claude
+
+Added `embeddedPort` to `src/runtime/embedded-config.ts` alongside `embeddedYaml`.
+The build command now validates the `--port` value and emits it into the esbuild
+plugin's generated module. The runtime reads `embeddedPort` as a fallback when no
+`--port` CLI arg is present, so a built artifact with `--port 8080` serves HTTP
+by default while still allowing runtime override via `--port`.

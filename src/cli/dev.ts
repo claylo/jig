@@ -36,7 +36,7 @@ export async function run(argv: string[]): Promise<void> {
     options: {
       help: { type: "boolean", short: "h" },
       port: { type: "string" },
-      watch: { type: "boolean", default: true },
+      watch: { type: "boolean", default: true, negatable: true },
     },
   });
 

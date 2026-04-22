@@ -16,32 +16,26 @@ Options:
 
 Run 'jig <command> --help' for command-specific help.`;
 
-const { positionals } = parseArgs({
-  allowPositionals: true,
-  strict: false,
-  args: process.argv.slice(2),
-});
-
-const command = positionals[0];
-
-if (!command || command === "help") {
-  process.stdout.write(USAGE + "\n");
-  process.exit(0);
-}
-
 const flagArgs = process.argv.slice(2);
-if (flagArgs.includes("-h") || flagArgs.includes("--help")) {
-  if (!command || command === "help") {
-    process.stdout.write(USAGE + "\n");
-    process.exit(0);
-  }
-}
 
 if (flagArgs.includes("-V") || flagArgs.includes("--version")) {
   const { createRequire } = await import("node:module");
   const require = createRequire(import.meta.url);
   const pkg = require("../../package.json") as { version: string };
   process.stdout.write(pkg.version + "\n");
+  process.exit(0);
+}
+
+const { positionals } = parseArgs({
+  allowPositionals: true,
+  strict: false,
+  args: flagArgs,
+});
+
+const command = positionals[0];
+
+if (!command || command === "help") {
+  process.stdout.write(USAGE + "\n");
   process.exit(0);
 }
 
