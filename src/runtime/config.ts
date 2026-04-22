@@ -655,80 +655,90 @@ function validateInput(
   return out;
 }
 
+const HANDLER_TYPES = ["inline", "exec", "dispatch", "compute", "http", "graphql", "workflow"] as const;
+
 function validateHandler(v: unknown, toolName: string): Handler {
   if (!v || typeof v !== "object") {
     throw new Error(`config: tools[${toolName}].handler must be a mapping`);
   }
   const h = v as Record<string, unknown>;
 
-  if (h["inline"] && typeof h["inline"] === "object") {
-    const inline = h["inline"] as Record<string, unknown>;
-    if (typeof inline["text"] !== "string") {
-      throw new Error(
-        `config: tools[${toolName}].handler.inline.text must be a string`,
-      );
-    }
-    return { inline: { text: inline["text"] } };
-  }
-
-  if (Array.isArray(h["exec"])) {
-    const arr = h["exec"] as unknown[];
-    if (arr.length === 0) {
-      throw new Error(
-        `config: tools[${toolName}].handler.exec array must not be empty`,
-      );
-    }
-    for (let i = 0; i < arr.length; i++) {
-      if (typeof arr[i] !== "string") {
-        throw new Error(
-          `config: tools[${toolName}].handler.exec[${i}] must be a string`,
-        );
-      }
-    }
-    const result: ExecHandler = { exec: arr as string[] };
-    if (h["max_output_bytes"] !== undefined) {
-      if (typeof h["max_output_bytes"] !== "number" || !Number.isFinite(h["max_output_bytes"]) || h["max_output_bytes"] <= 0) {
-        throw new Error(
-          `config: tools[${toolName}].handler.max_output_bytes must be a positive number`,
-        );
-      }
-      result.max_output_bytes = h["max_output_bytes"];
-    }
-    return result;
-  }
-
-  if (typeof h["exec"] === "string") {
+  const present = HANDLER_TYPES.filter((k) => h[k] !== undefined);
+  if (present.length === 0) {
     throw new Error(
-      `config: tools[${toolName}].handler.exec must be an array of strings, not a string`,
+      `config: tools[${toolName}].handler has no supported handler type (${HANDLER_TYPES.join(", ")})`,
+    );
+  }
+  if (present.length > 1) {
+    throw new Error(
+      `config: tools[${toolName}].handler has multiple handler types (${present.join(", ")}); exactly one is required`,
     );
   }
 
-  if (h["dispatch"] && typeof h["dispatch"] === "object") {
-    return validateDispatch(h["dispatch"], toolName);
-  }
+  const kind = present[0]!;
 
-  if ("compute" in h) {
-    // JSONLogic rules are arbitrary JSON; we do no structural validation
-    // at parse time. Unknown operators surface at invoke time as isError
-    // tool results, not as config errors.
-    return { compute: h["compute"] };
-  }
+  switch (kind) {
+    case "inline": {
+      const inline = h["inline"] as Record<string, unknown>;
+      if (!inline || typeof inline !== "object") {
+        throw new Error(
+          `config: tools[${toolName}].handler.inline must be a mapping`,
+        );
+      }
+      if (typeof inline["text"] !== "string") {
+        throw new Error(
+          `config: tools[${toolName}].handler.inline.text must be a string`,
+        );
+      }
+      return { inline: { text: inline["text"] } };
+    }
 
-  if (h["http"] && typeof h["http"] === "object") {
-    return validateHttp(h["http"], toolName);
-  }
+    case "exec": {
+      if (typeof h["exec"] === "string") {
+        throw new Error(
+          `config: tools[${toolName}].handler.exec must be an array of strings, not a string`,
+        );
+      }
+      const arr = h["exec"] as unknown[];
+      if (!Array.isArray(arr) || arr.length === 0) {
+        throw new Error(
+          `config: tools[${toolName}].handler.exec array must not be empty`,
+        );
+      }
+      for (let i = 0; i < arr.length; i++) {
+        if (typeof arr[i] !== "string") {
+          throw new Error(
+            `config: tools[${toolName}].handler.exec[${i}] must be a string`,
+          );
+        }
+      }
+      const result: ExecHandler = { exec: arr as string[] };
+      if (h["max_output_bytes"] !== undefined) {
+        if (typeof h["max_output_bytes"] !== "number" || !Number.isFinite(h["max_output_bytes"]) || h["max_output_bytes"] <= 0) {
+          throw new Error(
+            `config: tools[${toolName}].handler.max_output_bytes must be a positive number`,
+          );
+        }
+        result.max_output_bytes = h["max_output_bytes"];
+      }
+      return result;
+    }
 
-  if (h["graphql"] && typeof h["graphql"] === "object") {
-    return validateGraphql(h["graphql"], toolName);
-  }
+    case "dispatch":
+      return validateDispatch(h["dispatch"], toolName);
 
-  if (h["workflow"] && typeof h["workflow"] === "object") {
-    return validateWorkflowHandler(h["workflow"], toolName);
-  }
+    case "compute":
+      return { compute: h["compute"] };
 
-  throw new Error(
-    `config: tools[${toolName}].handler has no supported handler type (inline, exec, dispatch, compute, http, graphql, workflow)`,
-  );
+    case "http":
+      return validateHttp(h["http"], toolName);
+
+    case "graphql":
+      return validateGraphql(h["graphql"], toolName);
+
+    case "workflow":
+      return validateWorkflowHandler(h["workflow"], toolName);
+  }
 }
 
 /**

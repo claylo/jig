@@ -2,12 +2,12 @@
 audit: 2026-04-21-Full repo audit — src/runtime, src/cli, examples, and tests
 last_updated: 2026-04-21
 status:
-  fixed: 6
+  fixed: 9
   mitigated: 0
   accepted: 0
   disputed: 0
   deferred: 0
-  open: 6
+  open: 3
 ---
 
 # Actions Taken: Full repo audit — src/runtime, src/cli, examples, and tests
@@ -104,3 +104,45 @@ The build command now validates the `--port` value and emits it into the esbuild
 plugin's generated module. The runtime reads `embeddedPort` as a fallback when no
 `--port` CLI arg is present, so a built artifact with `--port 8080` serves HTTP
 by default while still allowing runtime override via `--port`.
+
+---
+
+## 2026-04-21 — Require exactly one handler type per tool
+
+**Disposition:** fixed
+**Addresses:** [handler-parsing-is-order-dependent](README.md#handler-parsing-is-order-dependent)
+**Commit:** pending (staged on fix/audit-runtime-hardening)
+**Author:** Clay Loveless + Claude
+
+Rewrote `validateHandler()` in `src/runtime/config.ts` to count recognized handler
+keys first, reject when more than one is present, then dispatch to the subtype
+validator via a switch. The implicit first-match ordering is gone — a handler with
+both `exec` and `inline` now gets a clear error instead of silently ignoring one.
+
+---
+
+## 2026-04-21 — Surface guard errors in workflow task results
+
+**Disposition:** fixed
+**Addresses:** [transition-guard-errors-collapse-to-generic-stall](README.md#transition-guard-errors-collapse-to-generic-stall)
+**Commit:** pending (staged on fix/audit-runtime-hardening)
+**Author:** Clay Loveless + Claude
+
+`pickTransition()` now returns a `TransitionResult` with an optional `guardError`
+field. When a `when:` guard throws, the error is captured and — if no other
+transition matches — surfaced in the task failure message instead of collapsing
+to the generic "workflow stalled" result.
+
+---
+
+## 2026-04-21 — Log rejected terminal writes in safeFail
+
+**Disposition:** fixed
+**Addresses:** [task-result-write-failures-swallowed](README.md#task-result-write-failures-swallowed)
+**Commit:** pending (staged on fix/audit-runtime-hardening)
+**Author:** Clay Loveless + Claude
+
+The empty `catch` in `safeFail()` now writes both the original workflow failure
+message and the store rejection error to stderr. The store is still the only
+output channel for the task result, but an operator watching logs will see both
+failures instead of silent disappearance.
