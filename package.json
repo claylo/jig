@@ -1,11 +1,35 @@
 {
-  "name": "jig",
+  "name": "@claylo/jig",
   "version": "1.0.0-alpha.0",
   "description": "YAML-driven single-file MCP server packaging tool",
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/claylo/jig.git"
+  },
+  "bugs": {
+    "url": "https://github.com/claylo/jig/issues"
+  },
+  "homepage": "https://github.com/claylo/jig#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "yaml",
+    "cli"
+  ],
   "bin": {
     "jig": "bin/jig"
+  },
+  "files": [
+    "bin/",
+    "examples/",
+    "scripts/",
+    "src/",
+    "tsconfig.json"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=24"
@@ -19,11 +43,11 @@
     "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/server": "2.0.0-alpha.2",
     "esbuild": "^0.28.0",
-    "json-logic-engine": "^5.0.0",
+    "json-logic-engine": "^5.0.7",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.3"
   }
 }

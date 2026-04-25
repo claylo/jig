@@ -43,10 +43,7 @@ Jig is a packaging tool for MCP servers. You write a `jig.yaml` describing your 
 Requires Node.js 24 or later.
 
 ```sh
-git clone https://github.com/claylo/jig.git
-cd jig
-npm install
-npm link
+npm install -g @claylo/jig
 ```
 
 Now `jig` is available everywhere:
@@ -54,6 +51,15 @@ Now `jig` is available everywhere:
 ```sh
 jig --version
 # 1.0.0-alpha.0
+```
+
+For local development from source:
+
+```sh
+git clone https://github.com/claylo/jig.git
+cd jig
+npm install
+npm link
 ```
 
 ## Quick start
