@@ -33,19 +33,20 @@ const WORKFLOW_KNOWN = new Set(["initial", "states"]);
  *   - tasks is undefined OR a mapping of workflowName -> WorkflowSpec
  *   - each workflow: initial (required, must reference a declared state),
  *     states (required, mapping of stateName -> StateSpec)
- *   - each state: mcpStatus (required, one of "working" | "completed" |
- *     "failed"), statusMessage (optional), actions (optional Handler[]),
- *     on (optional TransitionSpec[]), result (optional { text })
+ *   - each state: mcpStatus (required, one of "working" |
+ *     "input_required" | "completed" | "failed"), statusMessage
+ *     (optional), actions (optional Handler[]), on (optional
+ *     TransitionSpec[]), result (optional { text })
  *   - terminal states (mcpStatus: completed | failed) MUST declare result
  *     and MUST NOT declare actions or on
- *   - non-terminal states (mcpStatus: working) MUST declare on and MUST
- *     NOT declare result; actions is optional but typical
+ *   - working states MUST declare on and MUST NOT declare result;
+ *     actions is optional but typical
+ *   - input_required states MUST declare elicitation and on, and MUST NOT
+ *     declare actions or result
  *   - transitions: target (required, must reference a declared state),
  *     event (optional string, reserved for forward compat), when (optional
  *     JSONLogic, no structural validation)
- *   - mcpStatus: input_required → rejected with "Plan 9"
  *   - mcpStatus: cancelled → rejected with "client-initiated"
- *   - elicitation: key on state → rejected with "Plan 9"
  *   - unknown keys rejected at workflow, state, and transition levels
  *
  * `validateHandler` is passed in by the caller (config.ts) to avoid
